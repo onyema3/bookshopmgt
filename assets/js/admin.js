@@ -718,10 +718,35 @@ $(document).on('click','.bs-set-pin',function(){
     $('#bs-pin-input').val('');
     openModal('#bs-pin-modal');
 });
-$('#bs-save-pin').on('click',function(){
-    const uid=$('#bs-pin-user-id').val();const pin=$('#bs-pin-input').val();
-    if(pin.length<4){alert('PIN must be at least 4 digits');return;}
-    post({action:'bs_set_pin',user_id:uid,pin}).then(res=>{if(res.success){closeModals();alert('PIN saved!');location.reload();}});
+// Save PIN. Earlier this had two failure modes that both looked like
+// "the button refused to save":
+//   1. The .then() handler ignored the error case entirely — a bad nonce
+//      (expired admin session) or any 4xx left the modal open with no
+//      feedback. We now show the server message and re-enable the button.
+//   2. The 4–8 digit constraint was only enforced on the login side, so
+//      a non-numeric PIN saved fine but couldn't be used. Match the
+//      login regex client-side so the user finds out before the round-trip.
+$(document).on('click','#bs-save-pin',function(){
+    var uid = $('#bs-pin-user-id').val();
+    var pin = $('#bs-pin-input').val();
+    if(!/^[0-9]{4,8}$/.test(pin)){
+        alert('PIN must be 4–8 digits (numbers only).');
+        return;
+    }
+    var $btn = $(this).prop('disabled',true).text('Saving…');
+    post({action:'bs_set_pin', user_id:uid, pin:pin}).done(function(res){
+        $btn.prop('disabled',false).text('Save PIN');
+        if(res && res.success){
+            closeModals();
+            alert('PIN saved.');
+            location.reload();
+        } else {
+            alert('Save failed: '+((res && res.data) ? res.data : 'Unknown error. Try logging out and back in if the problem persists.'));
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled',false).text('Save PIN');
+        alert('Request failed ('+xhr.status+'). You may need to refresh the page or log in again.');
+    });
 });
 
 // ── Settings ──────────────────────────────────────────────────
