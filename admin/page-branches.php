@@ -92,6 +92,14 @@ function bs_page_branches(){
 
     <?php
     // Branch modal — build body as string, then output directly
+    $other_active = !empty($branches) ? count(array_filter($branches, function($b){ return $b->status==='active'; })) : 0;
+    // First-time multi-branch setup: the shop has been running on a single
+    // global stock_qty, so the new branch should inherit that. Once at least
+    // one branch is already active, a fresh location starting at zero is the
+    // less-surprising default — copying would inflate the apparent total.
+    $default_backfill = $other_active === 0 ? 'copy' : 'zero';
+    $checked_copy  = $default_backfill === 'copy' ? "checked" : '';
+    $checked_zero  = $default_backfill === 'zero' ? "checked" : '';
     $branch_body = "
     <input type='hidden' id='bs-branch-id'>
     <div class='bs-form-grid'>
@@ -101,6 +109,23 @@ function bs_page_branches(){
         <div class='bs-form-group'><label>Email</label><input type='email' id='bs-bf-email' class='bs-input'></div>
         <div class='bs-form-group'><label>Manager Name</label><input type='text' id='bs-bf-manager' class='bs-input'></div>
         <div class='bs-form-group'><label>Status</label><select id='bs-bf-status' class='bs-input'><option value='active'>Active</option><option value='inactive'>Inactive</option></select></div>
+        <div class='bs-form-group bs-span2' id='bs-branch-backfill-row'>
+            <label>Initial stock for this branch</label>
+            <div style='display:flex;flex-direction:column;gap:6px;font-size:.85rem;background:#fdf8f0;padding:10px 12px;border-radius:8px;border:1px solid #e0d4c0'>
+                <label style='display:flex;align-items:flex-start;gap:8px;cursor:pointer'>
+                    <input type='radio' name='bs-bf-backfill' value='copy' $checked_copy style='margin-top:3px'>
+                    <span><strong>Copy from current global stock</strong><br><span style='color:#8a7a65;font-size:.78rem'>Each book starts at its current Stock Qty. Best for first-time multi-branch setup.</span></span>
+                </label>
+                <label style='display:flex;align-items:flex-start;gap:8px;cursor:pointer'>
+                    <input type='radio' name='bs-bf-backfill' value='zero' $checked_zero style='margin-top:3px'>
+                    <span><strong>Start empty (zero stock)</strong><br><span style='color:#8a7a65;font-size:.78rem'>Recommended when stock will be transferred in or counted via stock take.</span></span>
+                </label>
+                <label style='display:flex;align-items:flex-start;gap:8px;cursor:pointer'>
+                    <input type='radio' name='bs-bf-backfill' value='' style='margin-top:3px'>
+                    <span><strong>Skip — set up later</strong><br><span style='color:#8a7a65;font-size:.78rem'>Sales at this branch will be rejected until books are seeded.</span></span>
+                </label>
+            </div>
+        </div>
     </div>";
     bs_modal('bs-branch-modal','Add / Edit Branch',$branch_body,"<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-save-branch'>Save Branch</button>");
     bs_modal('bs-branch-stock-modal','Branch Stock',"<div id='bs-branch-stock-body'>Loading...</div>",'','lg');

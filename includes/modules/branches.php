@@ -30,6 +30,61 @@ function bs_save_branch($data,$id=0){
     return $wpdb->insert_id;
 }
 
+/**
+ * Initialize bookshop_branch_stock rows for every active book at a branch.
+ *
+ * Without this, every product is implicitly at qty=0 for the branch — and
+ * the oversell guard in bs_create_sale will (correctly) reject every sale.
+ * That's the right behaviour when a brand-new branch genuinely has zero
+ * stock, but it's wrong when:
+ *
+ *   - the shop has been operating with a single global stock_qty and they're
+ *     just now turning on multi-branch (the global stock IS that branch's
+ *     stock); or
+ *   - a manager wants the new branch to start with a known transfer count
+ *     and intends to populate it via a stock take.
+ *
+ * Modes:
+ *   - 'copy': INSERT IGNORE branch_stock (branch_id, book_id, stock_qty) —
+ *     new branches inherit the current global stock as their starting count.
+ *     Existing rows are never overwritten.
+ *   - 'zero': INSERT IGNORE at qty=0. Useful when stock will be transferred
+ *     in or counted in by hand. (Equivalent to doing nothing in terms of
+ *     numbers, but explicit rows let stock-take and reorder logic see the
+ *     branch's catalogue.)
+ *
+ * Returns the number of rows inserted.
+ */
+function bs_backfill_branch_stock($branch_id, $mode='copy'){
+    global $wpdb;
+    $branch_id = intval($branch_id);
+    if(!$branch_id) return 0;
+    if(!bs_get_branch($branch_id)) return 0;
+
+    if($mode === 'zero'){
+        $sql = $wpdb->prepare(
+            "INSERT IGNORE INTO {$wpdb->prefix}bookshop_branch_stock (branch_id, book_id, qty)
+             SELECT %d, b.id, 0
+             FROM {$wpdb->prefix}bookshop_books b
+             WHERE b.status = 'active'",
+            $branch_id
+        );
+    } else {
+        $sql = $wpdb->prepare(
+            "INSERT IGNORE INTO {$wpdb->prefix}bookshop_branch_stock (branch_id, book_id, qty)
+             SELECT %d, b.id, b.stock_qty
+             FROM {$wpdb->prefix}bookshop_books b
+             WHERE b.status = 'active'",
+            $branch_id
+        );
+    }
+    $wpdb->query($sql);
+    $rows = intval($wpdb->rows_affected);
+    bs_audit('branch_stock_backfill','branch',$branch_id,
+        "Backfill mode=$mode — $rows books seeded");
+    return $rows;
+}
+
 // ── User ↔ Branch assignment ──────────────────────────────────────────────────
 // A user has at most one "home" branch (user_meta bookshop_branch_id).
 // Managers and admins are allowed to operate from any active branch.
@@ -70,6 +125,59 @@ function bs_user_branches($uid=0){
     if(!$home) return [];
     $b=bs_get_branch($home);
     return ($b && $b->status==='active') ? [$b] : [];
+}
+
+/**
+ * Branches the user is allowed to *view reports for*. Stricter than
+ * bs_user_branches() (which governs the POS picker).
+ *
+ * - Global admin (manage_options): every active branch.
+ * - Any other user with a home branch assigned: only that home branch,
+ *   even if they hold the bookshop_manager role.
+ * - Non-admin with no home branch: falls back to bs_user_branches().
+ *
+ * The point of the stricter rule is that without it, a bookshop_manager
+ * scoped to one location could hand-craft ?branch=N on the reports URL
+ * and see another branch's revenue.
+ */
+function bs_user_report_branches($uid=0){
+    if(!$uid) $uid=get_current_user_id();
+    if(!$uid) return [];
+    if(bs_user_is_admin($uid)) return bs_get_branches(true);
+    $home=bs_get_user_branch($uid);
+    if($home){
+        $b=bs_get_branch($home);
+        return ($b && $b->status==='active') ? [$b] : [];
+    }
+    return bs_user_branches($uid);
+}
+
+/**
+ * Validate a requested branch_id against what the user is allowed to see in
+ * reports. Returns the branch_id unchanged when valid, 0 when the user is
+ * unrestricted, or false when access should be denied.
+ *
+ * Used by the reports page (which silently coerces) and by the export
+ * endpoints (which reject with wp_die) to keep that one policy in one place.
+ */
+function bs_validate_report_branch($branch_id, $uid=0){
+    $branch_id = intval($branch_id);
+    if(!$uid) $uid = get_current_user_id();
+    $allowed = bs_user_report_branches($uid);
+    // Admin with no branches yet — let everything through.
+    if(empty($allowed) && bs_user_is_admin($uid)) return $branch_id;
+    // No allowed branches and not admin — deny.
+    if(empty($allowed)) return false;
+    if(!$branch_id){
+        // No branch requested. Admins may see "all branches"; everyone else
+        // is forced to their (single) allowed branch so they can never see
+        // an unscoped aggregate that includes other locations.
+        return bs_user_is_admin($uid) ? 0 : intval($allowed[0]->id);
+    }
+    foreach($allowed as $b){
+        if(intval($b->id) === $branch_id) return $branch_id;
+    }
+    return false;
 }
 
 function bs_get_active_branch_id($uid=0){

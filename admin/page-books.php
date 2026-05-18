@@ -2,16 +2,55 @@
 if(!defined('ABSPATH'))exit;
 
 function bs_page_books(){
-    $books=bs_get_books(['status'=>'','limit'=>500]);
+    // Branch picker. Scoped via the same helper the reports page uses, so a
+    // bookshop_manager pinned to one location can't peek at other branches'
+    // stock by editing ?branch=. Admins see "All branches"; everyone else is
+    // pinned to (or coerced into) their allowed branch.
+    $requested_branch = intval($_GET['branch'] ?? 0);
+    $allowed_branches = function_exists('bs_user_report_branches')
+        ? bs_user_report_branches() : [];
+    $branch_id = function_exists('bs_validate_report_branch')
+        ? bs_validate_report_branch($requested_branch) : $requested_branch;
+    if ($branch_id === false) {
+        echo '<div class="wrap"><h1>📚 Books Inventory</h1>'
+           . '<div class="notice notice-error"><p>You don\'t have access to that branch.</p></div></div>';
+        return;
+    }
+    $branch_label = '';
+    if ($branch_id) {
+        foreach ($allowed_branches as $b) {
+            if (intval($b->id) === $branch_id) { $branch_label = $b->name; break; }
+        }
+    }
+
+    // bs_get_books rewrites stock_qty to the branch column when branch_id is
+    // passed, so the rest of the table loop below is unchanged.
+    $books=bs_get_books(['status'=>'','limit'=>500,'branch_id'=>$branch_id]);
     $genres=bs_genres();
     $total_books=bs_count_books('active');
     global $wpdb;
-    $low_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty<=low_stock_threshold");
-    $out_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty=0");
+    if ($branch_id) {
+        // Per-branch stock counts: a book is "low" only if it's low *here*, not globally.
+        $low_stock=$wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books b
+             LEFT JOIN {$wpdb->prefix}bookshop_branch_stock bst
+                    ON bst.book_id=b.id AND bst.branch_id=%d
+             WHERE b.status='active' AND COALESCE(bst.qty,0)<=b.low_stock_threshold",
+            $branch_id));
+        $out_stock=$wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books b
+             LEFT JOIN {$wpdb->prefix}bookshop_branch_stock bst
+                    ON bst.book_id=b.id AND bst.branch_id=%d
+             WHERE b.status='active' AND COALESCE(bst.qty,0)=0",
+            $branch_id));
+    } else {
+        $low_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty<=low_stock_threshold");
+        $out_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty=0");
+    }
     ?>
     <div class="wrap bs-wrap">
     <div class="bs-header">
-        <h1>📚 Books Inventory</h1>
+        <h1>📚 Books Inventory<?php if($branch_label): ?> <span style="font-size:.6em;color:var(--muted);font-weight:500">— <?=esc_html($branch_label)?></span><?php endif; ?></h1>
         <div style="display:flex;gap:8px">
             <button class="bs-btn bs-btn-secondary" id="bs-import-csv-btn">⬆ Import CSV</button>
             <?php if(bs_woo_active()): ?>
@@ -41,12 +80,33 @@ function bs_page_books(){
         <label style="display:flex;align-items:center;gap:6px;font-size:.85rem">
             <input type="checkbox" id="bs-low-stock-filter"> Low stock only
         </label>
+        <?php if(count($allowed_branches) > 1): ?>
+            <!-- Branch picker triggers a server-side reload because bs_get_books
+                 rewrites the SELECT (stock column changes source). The other
+                 filters above are pure in-page hide/show. -->
+            <form method="get" style="display:inline-flex;align-items:center;gap:4px;font-size:.83rem;margin-left:auto">
+                <input type="hidden" name="page" value="bookshop-books">
+                🏪
+                <select name="branch" class="bs-select" onchange="this.form.submit()" style="min-width:140px">
+                    <?php if(function_exists('bs_user_is_admin') && bs_user_is_admin()): ?>
+                    <option value="0">All branches</option>
+                    <?php endif; ?>
+                    <?php foreach($allowed_branches as $b): ?>
+                    <option value="<?=intval($b->id)?>" <?=selected($branch_id,intval($b->id),false)?>><?=esc_html($b->name)?></option>
+                    <?php endforeach; ?>
+                </select>
+            </form>
+        <?php elseif(count($allowed_branches) === 1 && $branch_id): ?>
+            <span style="margin-left:auto;font-size:.83rem;color:var(--muted)">🏪 <?=esc_html($branch_label)?></span>
+        <?php endif; ?>
     </div>
 
     <table class="bs-table" id="bs-books-table">
         <thead><tr>
             <th>Cover</th><th>Title / Author</th><th>ISBN</th><th>Genre</th>
-            <th>Location</th><th>Cost</th><th>Price</th><th>Margin</th><th>Stock</th><th>Status</th><th>Actions</th>
+            <th>Location</th><th>Cost</th><th>Price</th><th>Margin</th>
+            <th><?=$branch_label ? 'Stock @ '.esc_html($branch_label) : 'Stock'?></th>
+            <th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody>
         <?php foreach($books as $b):
@@ -69,6 +129,9 @@ function bs_page_books(){
             <td class="<?=$stock_cls?>" style="display:flex;align-items:center;gap:6px">
                 <span><?=intval($b->stock_qty)?></span>
                 <button class="bs-icon-btn bs-adjust-stock" title="Adjust stock" data-id="<?=esc_attr($b->id)?>" data-qty="<?=intval($b->stock_qty)?>">✏️</button>
+                <?php if(!empty($allowed_branches) && (count($allowed_branches) > 1 || (function_exists('bs_user_is_admin') && bs_user_is_admin()))): ?>
+                <button class="bs-icon-btn bs-book-by-branch" title="Stock breakdown by branch" data-id="<?=esc_attr($b->id)?>" data-title="<?=esc_attr($b->title)?>">🏪</button>
+                <?php endif; ?>
             </td>
             <td><span class="bs-badge bs-badge-<?=$b->status?>"><?=$b->status?></span></td>
             <td>
@@ -80,6 +143,14 @@ function bs_page_books(){
         </tbody>
     </table>
     </div>
+
+    <?php
+    // Per-branch stock breakdown modal — rendered for everyone but only
+    // populated/triggered when there's >1 branch in the system.
+    bs_modal('bs-book-by-branch-modal','Stock by Branch',
+        "<div id='bs-book-by-branch-body'>Loading…</div>",
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Close</button>");
+    ?>
 
     <?php
     // Book modal
