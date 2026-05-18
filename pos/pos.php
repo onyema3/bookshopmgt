@@ -76,13 +76,17 @@ body{font-family:var(--fb);background:var(--paper);color:var(--ink);height:100vh
 .pos-empty span{font-size:2.5rem;display:block;margin-bottom:8px}
 
 /* Cart */
-.cart{background:#fff;display:flex;flex-direction:column;border-left:1px solid var(--border)}
-.cart-header{padding:12px 14px;border-bottom:1px solid var(--border);background:var(--warm);display:flex;align-items:center;justify-content:space-between}
+/* The cart panel itself scrolls when its content exceeds the viewport, so
+   the checkout button is always reachable. The items list also has its own
+   max-height + scroll so a long cart doesn't push everything else off
+   screen; the cart-footer keeps its natural height. */
+.cart{background:#fff;display:flex;flex-direction:column;border-left:1px solid var(--border);overflow-y:auto;min-height:0}
+.cart-header{padding:12px 14px;border-bottom:1px solid var(--border);background:var(--warm);display:flex;align-items:center;justify-content:space-between;flex:0 0 auto;position:sticky;top:0;z-index:5}
 .cart-header h2{font-family:var(--fh);font-size:1rem}
-.customer-bar{padding:8px 12px;border-bottom:1px solid var(--border);background:#fffbf0;display:flex;align-items:center;gap:6px}
+.customer-bar{padding:8px 12px;border-bottom:1px solid var(--border);background:#fffbf0;display:flex;align-items:center;gap:6px;flex:0 0 auto}
 .customer-bar input{flex:1;padding:5px 10px;border:1px solid var(--border);border-radius:6px;font-size:.8rem;font-family:var(--fb)}
 .customer-bar .cust-name{font-size:.8rem;font-weight:600;color:var(--amber-d)}
-.cart-items{flex:1;overflow-y:auto;padding:6px}
+.cart-items{flex:0 0 auto;overflow-y:auto;padding:6px;max-height:38vh;min-height:80px}
 .cart-item{display:flex;gap:6px;align-items:flex-start;padding:8px 6px;border-bottom:1px solid #f5efe4}
 .ci-info{flex:1;min-width:0}
 .ci-title{font-size:.8rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
