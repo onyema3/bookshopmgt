@@ -425,9 +425,16 @@ function bs_page_reports(){
                     </p>
                 </div>
                 <?php if ( $drift_count ): ?>
-                <button class="bs-btn bs-btn-primary" id="bs-reconcile-all-drift" style="font-size:.82rem">
-                    🔧 Reconcile all (<?=$drift_count?>)
-                </button>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <label for="bs-reconcile-all-direction" style="font-size:.78rem;color:var(--muted)">Direction:</label>
+                    <select id="bs-reconcile-all-direction" class="bs-input" style="font-size:.78rem;padding:4px 8px;width:auto">
+                        <option value="branches_to_global" selected>Set global = sum of branches</option>
+                        <option value="global_to_branches">Distribute global across branches</option>
+                    </select>
+                    <button class="bs-btn bs-btn-primary" id="bs-reconcile-all-drift" style="font-size:.82rem">
+                        🔧 Reconcile all (<?=$drift_count?>)
+                    </button>
+                </div>
                 <?php endif; ?>
             </div>
             <?php if ( ! $drift_count ): ?>
