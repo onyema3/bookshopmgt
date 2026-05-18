@@ -93,6 +93,8 @@ add_action('wp_ajax_bs_save_settings',function(){
         'bookshop_flw_currency',
         // Backup & API
         'bookshop_backup_email','bookshop_google_sheets_url',
+        // Drift digest
+        'bookshop_drift_digest_email',
     ];
     foreach($text_fields as $f){
         if(isset($_POST[$f])) update_option($f, sanitize_text_field($_POST[$f]));
@@ -232,13 +234,15 @@ add_action('wp_ajax_bs_get_stock_drift',function(){
 add_action('wp_ajax_bs_reconcile_book_stock',function(){
     if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
     if(!bs_verify('bs_admin_nonce'))         wp_send_json_error('Bad nonce');
-    $res = bs_reconcile_book_stock(intval($_POST['book_id'] ?? 0));
+    $direction = sanitize_text_field($_POST['direction'] ?? 'branches_to_global');
+    $res = bs_reconcile_book_stock(intval($_POST['book_id'] ?? 0), $direction);
     isset($res['error']) ? wp_send_json_error($res['error']) : wp_send_json_success($res);
 });
 add_action('wp_ajax_bs_reconcile_all_drift',function(){
     if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
     if(!bs_verify('bs_admin_nonce'))         wp_send_json_error('Bad nonce');
-    $res = bs_reconcile_all_drift(500);
+    $direction = sanitize_text_field($_POST['direction'] ?? 'branches_to_global');
+    $res = bs_reconcile_all_drift(500, $direction);
     wp_send_json_success($res);
 });
 add_action('wp_ajax_bs_get_branch_stock',function(){
@@ -287,6 +291,53 @@ add_action('wp_ajax_bs_get_book_branch_breakdown',function(){
         'title'  => $book->title,
     ]);
 });
+
+// Recent stock-affecting activity for one book. Powers the "Recent activity"
+// panel on the breakdown modal — pulls the last N audit rows whose
+// object_type='book' and object_id=$book_id and whose action is one of
+// the stock-changing actions (whitelisted so unrelated rows like
+// stock_reconciled — already shown elsewhere — and book metadata edits
+// don't crowd the panel).
+//
+// Same auth scope as the breakdown endpoint: bs_user_can_manage. The data
+// here is per-book, not cross-branch totals, so a manager scoped to one
+// branch seeing it is fine — and the audit rows themselves don't reveal
+// figures the manager couldn't already calculate from the breakdown.
+add_action('wp_ajax_bs_get_book_audit_activity',function(){
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
+    $book_id = intval($_GET['book_id'] ?? 0);
+    if(!$book_id) wp_send_json_error('Missing book_id');
+    if(!bs_get_book($book_id)) wp_send_json_error('Book not found');
+    $limit = max(1, min(50, intval($_GET['limit'] ?? 20)));
+
+    // The set of actions that touch this book's stock — kept inline rather
+    // than as a constant because it's small and the only consumer is here.
+    // Keep this in sync with the bs_audit() calls in sales.php, refunds.php,
+    // and modules/branches.php.
+    $actions = [
+        'branch_stock_sold',     // bs_create_sale, branch path
+        'global_stock_sold',     // bs_create_sale, global-only path
+        'branch_stock_adjusted', // bs_adjust_branch_stock (void/refund branch path)
+        'global_stock_voided',   // bs_void_sale, pre-v4 sale
+        'global_stock_refunded', // bs_create_refund, pre-v4 sale
+        'branch_stock_set',      // bs_set_branch_stock (manual / stock take)
+        'stock_transfer',        // bs_transfer_stock
+        'stock_reconciled',      // bs_reconcile_book_stock (either direction)
+    ];
+    $rows = bs_get_audit_log([
+        'object_type' => 'book',
+        'object_id'   => $book_id,
+        'action_in'   => $actions,
+        'limit'       => $limit,
+    ]);
+    // Strip the user-name field if it isn't useful — the LEFT JOIN gives
+    // null for staff who've since been deleted; replace with a clear label.
+    foreach($rows as $r){
+        if(empty($r->staff_name)) $r->staff_name = $r->staff_id ? '(user #'.intval($r->staff_id).')' : 'system';
+    }
+    wp_send_json_success(['rows'=>$rows]);
+});
+
 add_action('wp_ajax_bs_transfer_stock',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce');

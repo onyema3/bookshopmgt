@@ -104,30 +104,124 @@ function loadBookBranchBreakdown(id, ttl){
                  + 'or books that were never seeded at one or more branches.'
                  + '</span>';
             if(isAdmin){
-                html += '<div style="margin-top:8px"><button class="bs-btn bs-btn-secondary" id="bs-reconcile-this-book" '
-                     + 'data-book-id="'+id+'" style="font-size:.78rem;padding:5px 12px">'
+                // Two reconcile directions. Default is branches→global because
+                // once multi-branch is on, per-branch counts are authoritative.
+                // The global→branches option is for the rarer case where the
+                // global figure is right and the drift is a missing seed —
+                // the help text below the buttons spells out which to pick.
+                html += '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px">'
+                     + '<button class="bs-btn bs-btn-secondary bs-reconcile-this-book" '
+                     + 'data-book-id="'+id+'" data-direction="branches_to_global" '
+                     + 'style="font-size:.78rem;padding:5px 12px">'
                      + '🔧 Set global = ' + branchSum + ' (sum of branches)'
-                     + '</button></div>';
+                     + '</button>'
+                     + '<button class="bs-btn bs-btn-secondary bs-reconcile-this-book" '
+                     + 'data-book-id="'+id+'" data-direction="global_to_branches" '
+                     + 'style="font-size:.78rem;padding:5px 12px;background:#fff;border:1px solid #d4a017">'
+                     + '↘ Distribute global ' + globalQty + ' across branches'
+                     + '</button>'
+                     + '</div>'
+                     + '<div style="font-size:.72rem;color:#78350f;margin-top:6px;line-height:1.4">'
+                     + '<strong>Sum of branches</strong> is the usual fix — pick it when the global '
+                     + 'counter is wrong (pre-v4 sales). <strong>Distribute</strong> only when the '
+                     + 'global is right and a branch is missing a seed row; it splits global proportionally '
+                     + 'across branches that already have a row.'
+                     + '</div>';
             }
             html += '</div>';
         }
+        // Recent activity panel — collapsed by default so it doesn't push the
+        // breakdown table out of view, but its content loads eagerly so the
+        // first click is instant. Only the disclosure state is lazy.
+        html += '<details id="bs-book-activity-wrap" style="margin-top:14px" open>'
+             +   '<summary style="cursor:pointer;font-weight:600;font-size:.88rem;color:#5b3e0a">'
+             +     'Recent activity'
+             +     ' <span style="color:#999;font-weight:400;font-size:.78rem">'
+             +       '— last 20 stock changes for this book'
+             +     '</span>'
+             +   '</summary>'
+             +   '<div id="bs-book-activity-body" style="margin-top:8px"><em>Loading…</em></div>'
+             + '</details>';
         $('#bs-book-by-branch-body').html(html);
+        loadBookActivity(id);
     });
 }
 
-$(document).on('click','#bs-reconcile-this-book',function(){
-    var bookId = $(this).data('book-id');
-    var ttl    = $('#bs-book-by-branch-modal').data('book-title') || 'Book';
-    if(!confirm('This will set the global stock_qty for "'+ttl+'" to the sum of its per-branch counts. The change is logged in the audit trail. Continue?')) return;
-    var btn = $(this).prop('disabled',true).text('Reconciling…');
-    post({action:'bs_reconcile_book_stock', book_id: bookId}).then(function(res){
+function loadBookActivity(id){
+    get({action:'bs_get_book_audit_activity', book_id:id, limit:20}).then(function(res){
+        var $body = $('#bs-book-activity-body');
+        if(!$body.length) return;
+        if(!res.success){
+            $body.html('<em style="color:#999">Could not load activity: '+esc(res.data||'unknown')+'</em>');
+            return;
+        }
+        var rows = (res.data && res.data.rows) || [];
+        if(!rows.length){
+            // No audit rows yet most often means the instrumentation only
+            // started running recently. Word it that way rather than
+            // "no activity" so the admin doesn't conclude the book is dead.
+            $body.html('<p style="color:#999;font-size:.83rem;margin:6px 0">'
+                + 'No recent stock-affecting activity recorded for this book. '
+                + 'Activity tracking covers sales, voids, refunds, transfers, '
+                + 'manual adjustments, and reconciles.'
+                + '</p>');
+            return;
+        }
+        // Map raw action names to short, human-readable labels. Anything
+        // not in this map falls back to the raw action so unexpected rows
+        // still render rather than disappearing.
+        var labels = {
+            'branch_stock_sold':     'Sold',
+            'global_stock_sold':     'Sold (no branch)',
+            'branch_stock_adjusted': 'Adjusted',
+            'global_stock_voided':   'Void (no branch)',
+            'global_stock_refunded': 'Refund (no branch)',
+            'branch_stock_set':      'Manual set',
+            'stock_transfer':        'Transfer',
+            'stock_reconciled':      'Reconciled'
+        };
+        var html = '<div style="overflow-x:auto;max-height:280px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:6px">'
+                 + '<table class="bs-table bs-table-sm" style="margin:0;font-size:.8rem">'
+                 + '<thead style="position:sticky;top:0;background:#f5efe4;z-index:1">'
+                 + '<tr><th>When</th><th>What</th><th>Detail</th><th>By</th></tr>'
+                 + '</thead><tbody>';
+        rows.forEach(function(r){
+            var when = r.created_at || '';
+            var act  = labels[r.action] || r.action;
+            html += '<tr>'
+                 +   '<td style="white-space:nowrap;color:#666">'+esc(when)+'</td>'
+                 +   '<td style="white-space:nowrap"><strong>'+esc(act)+'</strong></td>'
+                 +   '<td style="font-family:Menlo,Consolas,monospace;font-size:.78rem;color:#444">'+esc(r.details||'')+'</td>'
+                 +   '<td style="white-space:nowrap;color:#666">'+esc(r.staff_name||'')+'</td>'
+                 + '</tr>';
+        });
+        html += '</tbody></table></div>';
+        $body.html(html);
+    });
+}
+
+$(document).on('click','.bs-reconcile-this-book',function(){
+    var $btn      = $(this);
+    var bookId    = $btn.data('book-id');
+    var direction = $btn.data('direction') || 'branches_to_global';
+    var ttl       = $('#bs-book-by-branch-modal').data('book-title') || 'Book';
+    var prompt    = direction === 'global_to_branches'
+        ? 'This will distribute the global stock for "'+ttl+'" across the branches that already have a row, in proportion to their current counts. The change is logged in the audit trail. Continue?'
+        : 'This will set the global stock_qty for "'+ttl+'" to the sum of its per-branch counts. The change is logged in the audit trail. Continue?';
+    if(!confirm(prompt)) return;
+    var origText = $btn.text();
+    $btn.prop('disabled',true).text('Reconciling…');
+    // Disable the sibling so the user can't double-fire while one is in flight.
+    var $siblings = $btn.siblings('.bs-reconcile-this-book').prop('disabled',true);
+    post({action:'bs_reconcile_book_stock', book_id: bookId, direction: direction}).then(function(res){
         if(!res.success){
             alert('Reconcile failed: '+(res.data||'Unknown error'));
-            btn.prop('disabled',false).text('🔧 Set global = sum of branches');
+            $btn.prop('disabled',false).text(origText);
+            $siblings.prop('disabled',false);
             return;
         }
         // Refresh the modal in place so the warning disappears and the new
-        // global value is visible. Also refresh the row in the books table
+        // values are visible. Also refresh the row in the books table
         // if the user is on that page — easier to just reload the body.
         loadBookBranchBreakdown(bookId, ttl);
     });
@@ -909,6 +1003,14 @@ $(document).on('click','#bs-sync-sheets-now',function(){
     post({action:'bs_sync_sheets',date:new Date().toISOString().split('T')[0]}).then(function(res){
         btn.prop('disabled',false).text('🔄 Sync Today to Sheets');
         alert(res.success?'Synced '+res.data.rows+' rows to Google Sheets':'Error: '+(res.data||'Unknown'));
+    });
+});
+$(document).on('click','#bs-send-drift-digest-now',function(){
+    if(!confirm('Send the drift digest now to the configured recipient?')) return;
+    var btn=$(this).prop('disabled',true).text('Sending…');
+    post({action:'bs_send_drift_digest_now'}).then(function(res){
+        btn.prop('disabled',false).text('📧 Send Drift Digest Now');
+        alert(res.success?res.data.message:'Error: '+(res.data||'Unknown'));
     });
 });
 

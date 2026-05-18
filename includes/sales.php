@@ -161,6 +161,22 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
                 'book_id' => $bid,
             ];
         }
+        // Audit the per-book decrement so the breakdown modal's recent
+        // activity panel can show "Sale BS-… — branch N: -2" rather than
+        // the user having to cross-reference sale_items by hand. Done
+        // here (not via bs_adjust_branch_stock) because the conditional
+        // UPDATE above is what actually enforces oversell; using the
+        // helper would race with that guard.
+        if ( $branch_id ) {
+            bs_audit( 'branch_stock_sold', 'book', $bid,
+                "Branch $branch_id: -$needed (sale $ref)" );
+        } else {
+            // Global-only path: still emit a book-scoped audit row so the
+            // per-book activity panel can attribute the decrement, even
+            // though no branch is involved.
+            bs_audit( 'global_stock_sold', 'book', $bid,
+                "Global stock_qty: -$needed (sale $ref, no branch)" );
+        }
     }
 
     $wpdb->insert("{$wpdb->prefix}bookshop_sales", [
@@ -284,7 +300,14 @@ function bs_void_sale( $sale_id ) {
         // recorded before the v4 migration have branch_id=NULL and only
         // ever decremented global stock, so we skip them here.
         if ( !empty($sale->branch_id) ) {
-            bs_adjust_branch_stock( intval($sale->branch_id), $bid, $qty );
+            bs_adjust_branch_stock( intval($sale->branch_id), $bid, $qty,
+                "void of sale {$sale->sale_ref}" );
+        } else {
+            // Pre-v4 sale: only a global counter to restock. Still emit
+            // a book-scoped audit row so the per-book activity panel
+            // attributes this to the void rather than leaving a silent gap.
+            bs_audit( 'global_stock_voided', 'book', $bid,
+                "Global stock_qty: +$qty (void of sale {$sale->sale_ref}, no branch)" );
         }
     }
 

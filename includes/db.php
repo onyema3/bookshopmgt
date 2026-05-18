@@ -443,6 +443,7 @@ function bs_install_v3_tables(){
         'bookshop_eod_email'              =>get_option('admin_email'),
         'bookshop_loyalty_expiry_months'  =>0,
         'bookshop_ip_whitelist'           =>'',
+        'bookshop_drift_digest_email'     =>get_option('admin_email'),
     ];
     foreach($defaults as $k=>$v){ if(get_option($k)===false) update_option($k,$v); }
 
