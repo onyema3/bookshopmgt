@@ -241,20 +241,132 @@ function bs_lookup_isbn_openlibrary( $isbn ) {
 
 // ── CSV Import ────────────────────────────────────────────────────────────────
 
+/**
+ * Import books from a CSV file.
+ *
+ * The base columns are the same fields bs_save_book() understands
+ * (title, author, isbn, genre, publisher, publish_year, cost_price,
+ * sell_price, stock_qty, description, etc.).
+ *
+ * In addition, the importer recognises two flavours of *per-branch*
+ * stock columns:
+ *
+ *   branch_<id>     e.g. "branch_3"     — the numeric branch id
+ *   branch_<slug>   e.g. "branch_main"  — sanitize_title() of the branch name
+ *
+ * For every recognised column, the value in that row is written to
+ * bookshop_branch_stock for that book/branch pair via the existing
+ * bs_set_branch_stock() helper. After all per-branch writes for a row
+ * the global bookshop_books.stock_qty is re-derived from the sum of
+ * branch counts, matching the behaviour of the Add/Edit Book modal.
+ *
+ * Rules:
+ *   - Branches the current user is not allowed to operate from
+ *     (bs_user_branches()) are silently skipped, even if the column is
+ *     present. This is the same gate the modal save uses.
+ *   - Unrecognised branch_* columns (e.g. for a branch that doesn't
+ *     exist or was renamed) are silently ignored rather than failing
+ *     the row, since this is a bulk operation.
+ *   - A row with no branch_* values still imports normally and uses
+ *     the legacy global stock_qty column.
+ */
 function bs_import_books_csv( $file_path ) {
     if ( !file_exists($file_path) ) return ['error' => 'File not found'];
-    $handle   = fopen($file_path, 'r');
-    $header   = fgetcsv($handle);
-    $header   = array_map('trim', array_map('strtolower', $header));
-    $imported = 0;
-    $errors   = [];
+    $handle = fopen($file_path, 'r');
+    $header = fgetcsv($handle);
+    if ( !$header ) {
+        fclose($handle);
+        return ['error' => 'Empty or invalid CSV file'];
+    }
+    $header = array_map('trim', array_map('strtolower', $header));
+
+    // Build the header-key → branch_id map for any branch_* columns.
+    // We resolve once up-front rather than per-row so a 500-row import
+    // doesn't repeat the lookup 500 times.
+    $allowed = function_exists('bs_user_branches') ? bs_user_branches() : [];
+    $by_slug = [];
+    $by_id   = [];
+    foreach ( $allowed as $b ) {
+        $by_slug[ sanitize_title($b->name) ] = intval($b->id);
+        $by_id[ intval($b->id) ]             = intval($b->id);
+    }
+    $branch_cols = []; // [ header_column_name => branch_id ]
+    foreach ( $header as $col ) {
+        if ( strpos($col, 'branch_') !== 0 ) continue;
+        $tail = substr($col, 7);
+        if ( $tail === '' ) continue;
+        if ( ctype_digit($tail) && isset($by_id[ intval($tail) ]) ) {
+            $branch_cols[$col] = intval($tail);
+        } elseif ( isset($by_slug[$tail]) ) {
+            $branch_cols[$col] = $by_slug[$tail];
+        }
+        // Unrecognised columns: silently ignored (logged in the result
+        // count below so the importer UI can warn the user).
+    }
+    // Also surface the count of branch_* columns the file *had*, so
+    // the result panel can say "you sent 3 branch columns; we matched 2".
+    $branch_cols_in_file = 0;
+    foreach ( $header as $col ) {
+        if ( strpos($col, 'branch_') === 0 && substr($col, 7) !== '' ) {
+            $branch_cols_in_file++;
+        }
+    }
+
+    global $wpdb;
+    $imported       = 0;
+    $branch_qty_set = 0;
+    $errors         = [];
     while ( ($row = fgetcsv($handle)) !== false ) {
-        if ( count($row) < count($header) ) { $errors[] = "Row skipped: column mismatch"; continue; }
+        if ( count($row) < count($header) ) {
+            $errors[] = "Row skipped: column mismatch";
+            continue;
+        }
         $data = array_combine($header, $row);
-        if ( empty($data['title']) ) { $errors[] = "Row skipped: no title"; continue; }
-        $res = bs_save_book($data);
-        if ( $res ) $imported++; else $errors[] = "Row skipped: DB error for '{$data['title']}'";
+        if ( empty($data['title']) ) {
+            $errors[] = "Row skipped: no title";
+            continue;
+        }
+        $book_id = bs_save_book($data);
+        if ( !$book_id ) {
+            $errors[] = "Row skipped: DB error for '{$data['title']}'";
+            continue;
+        }
+        $imported++;
+
+        if ( empty($branch_cols) ) continue;
+
+        // Per-branch writes for this row.
+        $touched = false;
+        foreach ( $branch_cols as $col => $branch_id ) {
+            if ( !isset($data[$col]) || $data[$col] === '' ) continue;
+            $qty = max(0, intval($data[$col]));
+            bs_set_branch_stock($branch_id, $book_id, $qty);
+            $branch_qty_set++;
+            $touched = true;
+        }
+        if ( $touched ) {
+            // Re-derive the global counter from the per-branch sum so
+            // unscoped listings stay in sync. Same logic as the modal
+            // save in includes/ajax-books.php.
+            $sum = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(SUM(qty),0) FROM {$wpdb->prefix}bookshop_branch_stock WHERE book_id=%d",
+                $book_id));
+            if ( $sum !== null ) {
+                $wpdb->update(
+                    "{$wpdb->prefix}bookshop_books",
+                    ['stock_qty' => intval($sum)],
+                    ['id' => intval($book_id)]
+                );
+            }
+        }
     }
     fclose($handle);
-    return ['imported' => $imported, 'errors' => $errors];
+
+    return [
+        'imported'                 => $imported,
+        'branch_qty_set'           => $branch_qty_set,
+        'branch_columns_in_file'   => $branch_cols_in_file,
+        'branch_columns_matched'   => count($branch_cols),
+        'errors'                   => $errors,
+    ];
 }

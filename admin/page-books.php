@@ -208,6 +208,17 @@ function bs_page_books(){
     // CSV import modal
     ob_start(); ?>
     <p>Download the <a href="#" id="bs-csv-template">CSV template</a> and fill it in before importing.</p>
+    <?php if (!empty($allowed_branches)): ?>
+    <p style="font-size:.83rem;color:var(--muted,#8a7a65);margin-top:8px">
+        <strong>Per-branch stock:</strong> add a column named <code>branch_&lt;slug&gt;</code>
+        (e.g. <code>branch_main</code>) or <code>branch_&lt;id&gt;</code>
+        (e.g. <code>branch_3</code>) for each branch. Values in those columns are
+        written to that branch's stock; the global <code>stock_qty</code> column is
+        ignored when any branch column is present and is recomputed from the sum.
+        The downloaded template includes one <code>branch_&lt;slug&gt;</code> column per branch
+        you have access to.
+    </p>
+    <?php endif; ?>
     <input type="file" id="bs-csv-file" accept=".csv" class="bs-input" style="margin-top:10px">
     <div id="bs-import-result" style="margin-top:12px"></div>
     <?php $body=ob_get_clean();
