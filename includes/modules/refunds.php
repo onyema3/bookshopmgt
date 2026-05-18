@@ -6,61 +6,81 @@ if(!defined('ABSPATH'))exit;
 
 function bs_create_refund($sale_id,$items_to_refund,$reason='',$restock=true){
     global $wpdb;
-    $sale=bs_get_sale($sale_id);
+    $sale_id = intval($sale_id);
+    $sale = bs_get_sale($sale_id);
     if(!$sale||$sale->status==='voided') return['error'=>'Sale not found or already voided'];
 
-    $refund_total=0;
-    $refund_items=[];
-    $sale_items=bs_get_sale_items($sale_id);
-    $sale_items_map=[];
-    foreach($sale_items as $si) $sale_items_map[$si->book_id]=$si;
+    $sale_items = bs_get_sale_items($sale_id);
+    $sale_items_map = [];
+    foreach($sale_items as $si) $sale_items_map[$si->book_id] = $si;
+
+    // ── Transaction: lock the sale, recompute eligibility, write everything
+    // ── together. Without this, two concurrent refunds against the same
+    // ── sale could each compute already_refunded=0 from the same baseline
+    // ── and over-refund. The SELECT … FOR UPDATE on the sale row serializes
+    // ── them so the second sees the first's writes and clamps correctly.
+    $wpdb->query('START TRANSACTION');
+    $wpdb->get_var( $wpdb->prepare(
+        "SELECT id FROM {$wpdb->prefix}bookshop_sales WHERE id=%d FOR UPDATE",
+        $sale_id
+    ) );
+
+    $refund_total = 0;
+    $refund_items = [];
 
     foreach($items_to_refund as $book_id=>$qty){
-        $book_id=intval($book_id);$qty=intval($qty);
+        $book_id = intval($book_id); $qty = intval($qty);
         if(!isset($sale_items_map[$book_id])) continue;
-        $si=$sale_items_map[$book_id];
-        $max_qty=intval($si->qty);
-        $already_refunded=intval($wpdb->get_var($wpdb->prepare(
+        $si = $sale_items_map[$book_id];
+        $max_qty = intval($si->qty);
+        $already_refunded = intval($wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE(SUM(ri.qty),0) FROM {$wpdb->prefix}bookshop_refund_items ri
              JOIN {$wpdb->prefix}bookshop_refunds r ON r.id=ri.refund_id
              WHERE r.sale_id=%d AND ri.book_id=%d AND r.status='completed'",
-            $sale_id,$book_id)));
-        $available=$max_qty-$already_refunded;
-        $qty=min($qty,$available);
-        if($qty<=0) continue;
-        $line=floatval($si->unit_price)*$qty;
-        $refund_total+=$line;
-        $unit_price = floatval($si->unit_price);
-        $line_total = $line;
-        $refund_items[]=['book_id'=>$book_id,'qty'=>$qty,'unit_price'=>$unit_price,'line_total'=>$line_total];
+            $sale_id, $book_id)));
+        $available = $max_qty - $already_refunded;
+        $qty = min($qty, $available);
+        if($qty <= 0) continue;
+        $line = floatval($si->unit_price) * $qty;
+        $refund_total += $line;
+        $refund_items[] = [
+            'book_id'    => $book_id,
+            'qty'        => $qty,
+            'unit_price' => floatval($si->unit_price),
+            'line_total' => $line,
+        ];
     }
 
-    if(empty($refund_items)) return['error'=>'No valid items to refund'];
+    if(empty($refund_items)){
+        $wpdb->query('ROLLBACK');
+        return['error'=>'No valid items to refund'];
+    }
 
-    $ref='RF-'.strtoupper(substr(md5(uniqid('',true)),0,6));
+    $ref = 'RF-'.strtoupper(substr(md5(uniqid('',true)),0,6));
     $wpdb->insert("{$wpdb->prefix}bookshop_refunds",[
-        'sale_id'  =>$sale_id,
-        'ref'      =>$ref,
-        'staff_id' =>get_current_user_id(),
-        'amount'   =>$refund_total,
-        'reason'   =>sanitize_text_field($reason),
-        'restock'  =>$restock?1:0,
-        'status'   =>'completed',
+        'sale_id'  => $sale_id,
+        'ref'      => $ref,
+        'staff_id' => get_current_user_id(),
+        'amount'   => $refund_total,
+        'reason'   => sanitize_text_field($reason),
+        'restock'  => $restock ? 1 : 0,
+        'status'   => 'completed',
     ]);
-    $refund_id=$wpdb->insert_id;
+    $refund_id = $wpdb->insert_id;
 
     foreach($refund_items as $ri){
         $wpdb->insert("{$wpdb->prefix}bookshop_refund_items",[
-            'refund_id' =>$refund_id,
-            'book_id'   =>$ri['book_id'],
-            'qty'        =>$ri['qty'],
-            'unit_price' =>$ri['unit_price'],
-            'line_total' =>$ri['line_total'],
+            'refund_id'  => $refund_id,
+            'book_id'    => $ri['book_id'],
+            'qty'        => $ri['qty'],
+            'unit_price' => $ri['unit_price'],
+            'line_total' => $ri['line_total'],
         ]);
         if($restock){
+            // Direct add — restocking can never go negative.
             $wpdb->query($wpdb->prepare(
                 "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=stock_qty+%d WHERE id=%d",
-                $ri['qty'],$ri['book_id']
+                $ri['qty'], $ri['book_id']
             ));
             // Restore at the same branch the original sale was made from.
             // Pre-migration sales have a NULL branch_id and are skipped.
@@ -70,6 +90,8 @@ function bs_create_refund($sale_id,$items_to_refund,$reason='',$restock=true){
         }
     }
     bs_audit('refund_created','refund',$refund_id,"Refund $ref for sale {$sale->sale_ref} — ".bs_fmt($refund_total).". Reason: $reason");
+
+    $wpdb->query('COMMIT');
     return['success'=>true,'ref'=>$ref,'amount'=>$refund_total,'refund_id'=>$refund_id];
 }
 

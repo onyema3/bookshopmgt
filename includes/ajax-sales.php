@@ -55,6 +55,21 @@ add_action('wp_ajax_bs_submit_sale', function() {
         'shift_id'        => $shift ? $shift->id : 0,
         'branch_id'       => $branch_id,
     ]);
+
+    // bs_create_sale returns ['error'=>..., 'code'=>...] for empty_cart,
+    // insufficient_stock, and stock_race. Forward the structured payload
+    // so the POS JS can branch on `code` (and fall back to `message`,
+    // which is what the existing handleNoBranchError / generic-alert
+    // path already reads).
+    if ( !empty($result['error']) ) {
+        wp_send_json_error([
+            'code'      => $result['code']      ?? 'sale_failed',
+            'message'   => $result['error'],
+            'book_id'   => $result['book_id']   ?? null,
+            'available' => $result['available'] ?? null,
+            'requested' => $result['requested'] ?? null,
+        ]);
+    }
     wp_send_json_success($result);
 });
 
