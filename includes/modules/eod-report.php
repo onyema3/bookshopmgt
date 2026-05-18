@@ -69,13 +69,13 @@ add_action('bookshop_daily_tasks','bs_send_eod_report');
 
 // Manual trigger
 add_action('wp_ajax_bs_send_eod_now',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized');
     bs_send_eod_report();
     wp_send_json_success(['message'=>'End-of-day report sent to '.get_option('bookshop_eod_email',get_option('admin_email'))]);
 });
 
 // Preview
 add_action('wp_ajax_bs_preview_eod',function(){
-    if(!current_user_can('manage_options')) wp_die('Unauthorized');
+    if(!bs_user_can_manage()) wp_die('Unauthorized');
     echo bs_generate_eod_report(); exit;
 });

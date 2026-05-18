@@ -12,7 +12,7 @@ add_action('wp_ajax_bs_search_books', function() {
 
 // ── Admin: ISBN lookup ────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_lookup_isbn', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     $raw  = sanitize_text_field( $_GET['isbn'] ?? '' );
     $isbn = preg_replace('/[^0-9Xx]/', '', $raw);
     $isbn = strtoupper(trim($isbn));
@@ -36,7 +36,7 @@ add_action('wp_ajax_bs_lookup_isbn', function() {
 // ── Admin: Save book (insert or update) ──────────────────────────────────────
 add_action('wp_ajax_bs_save_book', function() {
     global $wpdb;
-    if ( !current_user_can('manage_options') ) {
+    if ( !bs_user_can_manage() ) {
         wp_send_json_error('Unauthorized', 403);
     }
 
@@ -56,21 +56,21 @@ add_action('wp_ajax_bs_save_book', function() {
 
 // ── Admin: Get single book ────────────────────────────────────────────────────
 add_action('wp_ajax_bs_get_book', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     $b = bs_get_book( intval($_GET['id'] ?? 0) );
     $b ? wp_send_json_success($b) : wp_send_json_error('Not found');
 });
 
 // ── Admin: Delete (archive) book ─────────────────────────────────────────────
 add_action('wp_ajax_bs_delete_book', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     bs_delete_book( intval($_POST['id'] ?? 0) );
     wp_send_json_success();
 });
 
 // ── Admin: Adjust stock ───────────────────────────────────────────────────────
 add_action('wp_ajax_bs_adjust_stock', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     $id  = intval( $_POST['id']  ?? 0 );
     $qty = intval( $_POST['qty'] ?? 0 );
     bs_adjust_stock($id, $qty, 'Manual adjustment');
@@ -80,7 +80,7 @@ add_action('wp_ajax_bs_adjust_stock', function() {
 
 // ── Admin: CSV import ─────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_import_csv', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     if ( empty($_FILES['csv']['tmp_name']) ) wp_send_json_error('No file uploaded');
     $res = bs_import_books_csv( $_FILES['csv']['tmp_name'] );
     wp_send_json_success($res);
@@ -88,6 +88,6 @@ add_action('wp_ajax_bs_import_csv', function() {
 
 // ── Admin: Import from WooCommerce ────────────────────────────────────────────
 add_action('wp_ajax_bs_import_woo', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     wp_send_json_success( bs_import_from_woocommerce() );
 });

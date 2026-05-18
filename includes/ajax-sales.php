@@ -45,7 +45,7 @@ add_action('wp_ajax_bs_submit_sale', function() {
 
 // ── Admin: Get sale items ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_get_sale_items', function() {
-    if ( !current_user_can('manage_options') ) wp_send_json_error('Unauthorized', 403);
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
     $items = bs_get_sale_items( intval($_GET['id'] ?? 0) );
     wp_send_json_success($items);
 });
@@ -115,7 +115,7 @@ add_action('wp_ajax_bs_get_open_shift', function() {
 
 // ── Export: Sales CSV ─────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_sales_csv', function() {
-    if ( !current_user_can('manage_options') ) wp_die('Unauthorized');
+    if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from  = sanitize_text_field($_GET['from'] ?? '');
     $to    = sanitize_text_field($_GET['to']   ?? '');
     $sales = bs_get_sales(['from'=>$from,'to'=>$to,'limit'=>10000]);
@@ -140,7 +140,7 @@ add_action('wp_ajax_bs_export_sales_csv', function() {
 
 // ── Export: Sales JSON ────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_sales_json', function() {
-    if ( !current_user_can('manage_options') ) wp_die('Unauthorized');
+    if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from  = sanitize_text_field($_GET['from'] ?? '');
     $to    = sanitize_text_field($_GET['to']   ?? '');
     $sales = bs_get_sales(['from'=>$from,'to'=>$to,'limit'=>10000]);
@@ -175,7 +175,7 @@ add_action('wp_ajax_bs_export_sales_json', function() {
 
 // ── Export: Inventory CSV ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_inventory_csv', function() {
-    if ( !current_user_can('manage_options') ) wp_die('Unauthorized');
+    if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $books = bs_get_books(['status'=>'','limit'=>10000]);
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="inventory-'.date('Y-m-d').'.csv"');
@@ -200,7 +200,7 @@ add_action('wp_ajax_bs_export_inventory_csv', function() {
 // ── Export: Report PDF (via mPDF-less HTML-to-PDF using browser print) ────────
 // Returns a self-contained HTML page that auto-triggers print dialog
 add_action('wp_ajax_bs_export_report_pdf', function() {
-    if ( !current_user_can('manage_options') ) wp_die('Unauthorized');
+    if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
     $to   = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
     // Redirect to the printable report page which handles PDF output

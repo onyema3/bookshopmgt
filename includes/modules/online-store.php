@@ -43,8 +43,124 @@ function bs_get_online_orders($args=[]){
 }
 function bs_update_online_order_status($id,$status){
     global $wpdb;
-    $wpdb->update("{$wpdb->prefix}bookshop_online_orders",['status'=>sanitize_text_field($status)],['id'=>intval($id)]);
-    bs_audit('online_order_status','online_order',$id,"Status: $status");
+    $id=intval($id);
+    $status=sanitize_text_field($status);
+    $allowed=['pending','paid','processing','ready','completed','cancelled'];
+    if(!in_array($status,$allowed,true)) return['error'=>'Invalid status'];
+
+    $order=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$id));
+    if(!$order) return['error'=>'Order not found'];
+
+    // No-op if already in this status
+    if($order->status===$status){
+        return['ok'=>true,'no_change'=>true,'status'=>$status];
+    }
+
+    $wpdb->update("{$wpdb->prefix}bookshop_online_orders",['status'=>$status],['id'=>$id]);
+    bs_audit('online_order_status','online_order',$id,"Status: {$order->status} → $status");
+
+    // On transition to completed, materialize as a sale (decrement stock, create
+    // sales row) once. Idempotent via linked_sale_id check.
+    if($status==='completed' && empty($order->linked_sale_id)){
+        bs_complete_online_order($id);
+    }
+
+    // Optional customer notification on key transitions
+    if(in_array($status,['ready','completed','cancelled'],true)){
+        bs_notify_online_order_status_change($id,$status);
+    }
+
+    return['ok'=>true,'status'=>$status];
+}
+
+/**
+ * Convert a paid/ready online order into a completed in-system sale.
+ * - Decrements book stock
+ * - Inserts a row in bookshop_sales (and sale_items)
+ * - Records linked_sale_id on the online order so this only runs once.
+ * Returns the linked_sale_id, or false on failure.
+ */
+function bs_complete_online_order($order_id){
+    global $wpdb;
+    $order=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",intval($order_id)));
+    if(!$order) return false;
+    // Idempotency
+    if(!empty($order->linked_sale_id)) return intval($order->linked_sale_id);
+
+    $items=json_decode($order->items_data,true);
+    if(!is_array($items)||empty($items)) return false;
+
+    // Build cart in the shape bs_create_sale expects: each item { id, qty, price }
+    $cart=[];
+    foreach($items as $i){
+        $book_id=intval($i['id']??$i['book_id']??0);
+        $qty   =max(1,intval($i['qty']??1));
+        $price =floatval($i['price']??0);
+        if(!$book_id) continue;
+        $cart[]=['id'=>$book_id,'qty'=>$qty,'price'=>$price];
+    }
+    if(empty($cart)) return false;
+
+    // Match existing customer by email/phone, if any. We do not auto-create
+    // customers from online orders here; a manager can do that explicitly.
+    $customer_id=0;
+    if($order->customer_email){
+        $customer_id=intval($wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}bookshop_customers WHERE email=%s LIMIT 1",
+            $order->customer_email)));
+    }
+    if(!$customer_id && $order->customer_phone){
+        $customer_id=intval($wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}bookshop_customers WHERE phone=%s LIMIT 1",
+            $order->customer_phone)));
+    }
+
+    $payment=$order->payment_gateway?'card':'other';
+    $note ="Online order {$order->ref}".($order->payment_ref?" — gateway ref: {$order->payment_ref}":'');
+
+    $res=bs_create_sale($cart,get_current_user_id()?:0,[
+        'customer_id'    =>$customer_id,
+        'payment'        =>$payment,
+        'payment_details'=>[
+            'source'         =>'online_order',
+            'online_order_id'=>intval($order->id),
+            'gateway'        =>$order->payment_gateway,
+            'gateway_ref'    =>$order->payment_ref,
+        ],
+        'note'           =>$note,
+    ]);
+
+    if(empty($res['sale_id'])) return false;
+
+    $wpdb->update(
+        "{$wpdb->prefix}bookshop_online_orders",
+        ['linked_sale_id'=>intval($res['sale_id'])],
+        ['id'=>intval($order->id)]
+    );
+    bs_audit('online_order_completed','online_order',$order->id,"Linked to sale {$res['ref']}");
+    return intval($res['sale_id']);
+}
+
+/**
+ * Notify the customer of an online-order status change (best-effort email).
+ */
+function bs_notify_online_order_status_change($order_id,$status){
+    global $wpdb;
+    $order=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",intval($order_id)));
+    if(!$order||!$order->customer_email) return false;
+    $shop=get_option('bookshop_receipt_header',get_bloginfo('name'));
+    $subject_map=[
+        'ready'    =>"[$shop] Your order {$order->ref} is ready",
+        'completed'=>"[$shop] Order {$order->ref} completed — thank you!",
+        'cancelled'=>"[$shop] Order {$order->ref} cancelled",
+    ];
+    $body_map=[
+        'ready'    =>"Hello {$order->customer_name},\n\nYour order {$order->ref} is ready for ".($order->type==='delivery'?'delivery':'collection').".\n\nTotal: ".bs_fmt($order->total)."\n\nThank you!",
+        'completed'=>"Hello {$order->customer_name},\n\nYour order {$order->ref} has been completed.\n\nTotal: ".bs_fmt($order->total)."\n\nThank you for your purchase!",
+        'cancelled'=>"Hello {$order->customer_name},\n\nYour order {$order->ref} has been cancelled. If this is unexpected, please contact us.\n\nThank you.",
+    ];
+    if(!isset($subject_map[$status])) return false;
+    return wp_mail($order->customer_email,$subject_map[$status],$body_map[$status],['Content-Type: text/plain; charset=UTF-8']);
 }
 
 // ── Shortcode: Book Catalogue ─────────────────────────────────────────────────

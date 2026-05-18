@@ -8,7 +8,7 @@ if(!defined('ABSPATH'))exit;
 // ── Printable Sales Report ────────────────────────────────────────────────────
 add_action('init',function(){
     if(empty($_GET['bookshop_print_report'])) return;
-    if(!current_user_can('manage_options')) wp_die('Unauthorized');
+    if(!bs_user_can_manage()) wp_die('Unauthorized');
     $from=sanitize_text_field($_GET['from']??date('Y-m-01'));
     $to  =sanitize_text_field($_GET['to']??date('Y-m-d'));
     bs_render_printable_report($from,$to);
@@ -146,7 +146,7 @@ tr:nth-child(even) td{background:#fdf8f0}
 
 // ── AJAX: Get print report URL ────────────────────────────────────────────────
 add_action('wp_ajax_bs_get_print_url',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized');
     $from=sanitize_text_field($_GET['from']??date('Y-m-01'));
     $to  =sanitize_text_field($_GET['to']??date('Y-m-d'));
     $url =home_url("/?bookshop_print_report=1&from=$from&to=$to");

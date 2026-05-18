@@ -103,12 +103,27 @@ function bs_handle_online_payment_success($ref,$amount,$gateway,$meta){
     $type=$meta['type']??'reservation';
     $object_id=intval($meta['object_id']??0);
     if($type==='reservation'&&$object_id){
+        // Idempotency — only update if the same payment ref hasn't already been recorded.
+        $existing_ref=$wpdb->get_var($wpdb->prepare(
+            "SELECT payment_ref FROM {$wpdb->prefix}bookshop_reservations WHERE id=%d",$object_id));
+        if($existing_ref===$ref) return; // already processed
         $wpdb->update("{$wpdb->prefix}bookshop_reservations",['status'=>'notified','payment_ref'=>$ref,'payment_amount'=>$amount,'payment_gateway'=>$gateway],['id'=>$object_id]);
+        bs_audit('online_payment','payment',$object_id,"$gateway reservation payment: $ref — ".bs_fmt($amount));
         // Notify admin
         $shop=get_option('bookshop_receipt_header',get_bloginfo('name'));
         wp_mail(get_option('admin_email'),"[$shop] Reservation Payment Received","Ref: $ref | Amount: ".bs_fmt($amount)." via $gateway");
     } elseif($type==='online_order'&&$object_id){
-        $wpdb->update("{$wpdb->prefix}bookshop_online_orders",['status'=>'paid','payment_ref'=>$ref,'payment_amount'=>$amount,'payment_gateway'=>$gateway],['id'=>$object_id]);
+        // Idempotency — skip if same payment ref already recorded.
+        $existing=$wpdb->get_row($wpdb->prepare(
+            "SELECT status,payment_ref FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$object_id));
+        if(!$existing) return;
+        if($existing->payment_ref===$ref){
+            return; // already processed
+        }
+        $wpdb->update("{$wpdb->prefix}bookshop_online_orders",
+            ['status'=>'paid','payment_ref'=>$ref,'payment_amount'=>$amount,'payment_gateway'=>$gateway],
+            ['id'=>$object_id]
+        );
+        bs_audit('online_payment','payment',$object_id,"$gateway online_order payment: $ref — ".bs_fmt($amount));
     }
-    bs_audit('online_payment','payment',0,"$gateway payment: $ref — ".bs_fmt($amount));
 }

@@ -59,7 +59,7 @@ function bs_auto_sync_sheets(){
 
 // Manual AJAX sync
 add_action('wp_ajax_bs_sync_sheets',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized');
     $date=sanitize_text_field($_POST['date']??date('Y-m-d'));
     $res=bs_sync_to_google_sheets($date);
     isset($res['error'])?wp_send_json_error($res['error']):wp_send_json_success($res);

@@ -333,6 +333,7 @@ function bs_install_extra_tables(){
         payment_ref      VARCHAR(100) DEFAULT '',
         payment_amount   DECIMAL(10,2) DEFAULT NULL,
         payment_gateway  VARCHAR(50) DEFAULT '',
+        linked_sale_id   BIGINT UNSIGNED DEFAULT NULL,
         created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id), KEY ref (ref), KEY status (status)
     ) $c;");
@@ -367,6 +368,10 @@ function bs_install_extra_tables(){
     // Add payment_ref to reservations if missing
     if(!$wpdb->get_var("SHOW COLUMNS FROM {$wpdb->prefix}bookshop_reservations LIKE 'payment_ref'")){
         $wpdb->query("ALTER TABLE {$wpdb->prefix}bookshop_reservations ADD COLUMN payment_ref VARCHAR(100) DEFAULT '' AFTER status, ADD COLUMN payment_amount DECIMAL(10,2) DEFAULT NULL, ADD COLUMN payment_gateway VARCHAR(50) DEFAULT ''");
+    }
+    // Add linked_sale_id to online_orders for completion idempotency
+    if(!$wpdb->get_var("SHOW COLUMNS FROM {$wpdb->prefix}bookshop_online_orders LIKE 'linked_sale_id'")){
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}bookshop_online_orders ADD COLUMN linked_sale_id BIGINT UNSIGNED DEFAULT NULL AFTER payment_gateway");
     }
 
     // New settings defaults

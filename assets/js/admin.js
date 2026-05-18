@@ -527,7 +527,6 @@ $('#bs-save-settings').on('click',function(){
         alert('Request failed ('+xhr.status+'). Please try again.');
     });
 });
-});
 
 // ── Branches ──────────────────────────────────────────────────────────────────
 $(document).on('click','#bs-add-branch',function(){
@@ -567,11 +566,10 @@ $(document).on('click','.bs-view-branch-stock',function(){
     openModal('#bs-branch-stock-modal');
     get({action:'bs_get_branch_stock',id}).then(function(res){
         if(!res.success){$('#bs-branch-stock-body').html('<em>Error</em>');return;}
-        var cur=currency;
         var html='<table class="bs-table bs-table-sm"><thead><tr><th>Title</th><th>Author</th><th>ISBN</th><th>Stock</th><th>Price</th></tr></thead><tbody>';
         (res.data||[]).forEach(function(b){
             var cls=parseInt(b.qty)<=parseInt(b.low_stock_threshold)?'bs-low-stock':'';
-            html+='<tr><td>'+esc(b.title)+'</td><td>'+esc(b.author)+'</td><td>'+esc(b.isbn)+'</td><td class="'+cls+'">'+b.qty+'</td><td>'+cur+fmt(b.sell_price)+'</td></tr>';
+            html+='<tr><td>'+esc(b.title)+'</td><td>'+esc(b.author)+'</td><td>'+esc(b.isbn)+'</td><td class="'+cls+'">'+b.qty+'</td><td>'+fmt(b.sell_price)+'</td></tr>';
         });
         if(!res.data.length) html+='<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">No stock recorded for this branch.</td></tr>';
         html+='</tbody></table>';
@@ -597,7 +595,7 @@ $(document).on('click','#bs-load-segment',function(){
         if(!res.success){alert('Failed to load');return;}
         const customers=res.data||[];
         segmentIds=customers.map(function(c){return c.id;});
-        $('#msg-segment-result').html('<strong>'+customers.length+' customers</strong> selected '+(customers.filter(function(c){return c.email;}).length+' with email, '+customers.filter(function(c){return c.phone;}).length+' with phone)'));
+        $('#msg-segment-result').html('<strong>'+customers.length+' customers</strong> selected ('+customers.filter(function(c){return c.email;}).length+' with email, '+customers.filter(function(c){return c.phone;}).length+' with phone)');
         const listHtml=customers.slice(0,10).map(function(c){
             return '<div style="padding:4px 0;border-bottom:1px solid #f0e8d8">'+esc(c.name)+' — '+esc(c.email||'no email')+'</div>';
         }).join('')+(customers.length>10?'<div style="color:var(--muted);font-size:.75rem;margin-top:4px">…and '+(customers.length-10)+' more</div>':'');
@@ -665,18 +663,14 @@ $(document).on('click','.bs-view-online-order',function(){
     const ref=$(this).data('ref');
     const items=$(this).data('items')||[];
     $('#bs-oo-modal-title').text('Order — '+ref);
-    var cur=currency;
     var html='<div style="padding:16px"><table class="bs-table bs-table-sm"><thead><tr><th>Book</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>';
     (Array.isArray(items)?items:[]).forEach(function(i){
-        html+='<tr><td>'+esc(i.title||'')+'</td><td>'+i.qty+'</td><td>'+cur+fmt(i.price)+'</td><td>'+cur+fmt(i.price*i.qty)+'</td></tr>';
+        html+='<tr><td>'+esc(i.title||'')+'</td><td>'+i.qty+'</td><td>'+fmt(i.price)+'</td><td>'+fmt(i.price*i.qty)+'</td></tr>';
     });
     html+='</tbody></table></div>';
     $('#bs-oo-modal-body').html(html);
     openModal('#bs-online-order-modal');
 });
-
-function fmt(n){return parseFloat(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
-function esc(s){return $('<div>').text(s||'').html();}
 
 // ── Settings page extras ───────────────────────────────────────────────────────
 $(document).on('click','#bs-send-eod-now',function(){
@@ -887,4 +881,97 @@ $(document).on('click','#bs-submit-stocktake',function(){
             alert('Error: '+(res.data||'Unknown error'));
         }
     });
+});
+
+
+// ── Stock Transfer ────────────────────────────────────────────────────────────
+$(document).on('click','.bs-transfer-stock-btn',function(){
+    var fromId=$(this).data('id');
+    var fromName=$(this).data('name');
+    // Build branch + book pickers
+    var toOptions=$('.bs-view-branch-stock').map(function(){
+        var bid=$(this).data('id'),bname=$(this).data('name');
+        if(parseInt(bid)===parseInt(fromId)) return '';
+        return '<option value="'+bid+'">'+esc(bname)+'</option>';
+    }).get().join('');
+    if(!toOptions){
+        alert('You need at least 2 active branches to transfer stock.');
+        return;
+    }
+    var html='<p style="margin-bottom:12px;color:var(--muted);font-size:.85rem">Transferring from <strong>'+esc(fromName)+'</strong></p>'
+        +'<div class="bs-form-group" style="margin-bottom:12px">'
+        +'  <label>Destination Branch</label>'
+        +'  <select id="xfer-to-branch" class="bs-input">'+toOptions+'</select>'
+        +'</div>'
+        +'<div class="bs-form-group" style="margin-bottom:12px">'
+        +'  <label>Book (search by title or ISBN)</label>'
+        +'  <input type="text" id="xfer-book-search" class="bs-input" placeholder="Type to search..." autocomplete="off">'
+        +'  <div id="xfer-book-results" style="border:1px solid var(--border);border-radius:6px;margin-top:4px;max-height:160px;overflow-y:auto;display:none"></div>'
+        +'  <input type="hidden" id="xfer-book-id">'
+        +'  <div id="xfer-book-selected" style="margin-top:6px;font-size:.82rem"></div>'
+        +'</div>'
+        +'<div class="bs-form-group" style="margin-bottom:12px">'
+        +'  <label>Quantity</label>'
+        +'  <input type="number" id="xfer-qty" class="bs-input" min="1" value="1">'
+        +'</div>';
+    $('#bs-branch-stock-modal .bs-modal-header h2').text('Transfer Stock — '+fromName);
+    $('#bs-branch-stock-body').html(html);
+    $('#bs-branch-stock-modal .bs-modal-footer').remove();
+    $('#bs-branch-stock-modal .bs-modal-box').append(
+        '<div class="bs-modal-footer">'
+        +'<button class="bs-btn bs-btn-secondary bs-modal-close">Cancel</button>'
+        +'<button class="bs-btn bs-btn-primary" id="bs-confirm-transfer" data-from="'+fromId+'">Transfer</button>'
+        +'</div>'
+    );
+    openModal('#bs-branch-stock-modal');
+});
+
+// Book search inside the transfer modal
+var xferSearchTimer=null;
+$(document).on('input','#xfer-book-search',function(){
+    var q=$(this).val().trim();
+    clearTimeout(xferSearchTimer);
+    if(q.length<2){$('#xfer-book-results').hide().empty();return;}
+    xferSearchTimer=setTimeout(function(){
+        get({action:'bs_search_books',q:q}).then(function(res){
+            if(!res.success){$('#xfer-book-results').hide();return;}
+            var html=(res.data||[]).slice(0,8).map(function(b){
+                return '<div class="xfer-book-pick" data-id="'+b.id+'" data-title="'+esc(b.title)+'" '
+                    +'style="padding:8px 10px;cursor:pointer;border-bottom:1px solid #f0e8d8">'
+                    +'<strong>'+esc(b.title)+'</strong>'
+                    +'<div style="font-size:.75rem;color:var(--muted)">'+esc(b.author||'')+(b.isbn?' &middot; '+esc(b.isbn):'')+' &middot; Stock: '+parseInt(b.stock_qty)+'</div>'
+                    +'</div>';
+            }).join('');
+            if(!html) html='<div style="padding:8px;color:var(--muted)">No matches</div>';
+            $('#xfer-book-results').html(html).show();
+        });
+    },220);
+});
+$(document).on('click','.xfer-book-pick',function(){
+    $('#xfer-book-id').val($(this).data('id'));
+    $('#xfer-book-selected').html('Selected: <strong>'+esc($(this).data('title'))+'</strong>');
+    $('#xfer-book-results').hide();
+    $('#xfer-book-search').val($(this).data('title'));
+});
+
+$(document).on('click','#bs-confirm-transfer',function(){
+    var from=$(this).data('from');
+    var to=$('#xfer-to-branch').val();
+    var bookId=$('#xfer-book-id').val();
+    var qty=parseInt($('#xfer-qty').val())||0;
+    if(!to){alert('Choose a destination branch');return;}
+    if(!bookId){alert('Select a book to transfer');return;}
+    if(qty<1){alert('Quantity must be at least 1');return;}
+    var btn=$(this).prop('disabled',true).text('Transferring…');
+    post({action:'bs_transfer_stock',from:from,to:to,book_id:bookId,qty:qty}).then(function(res){
+        btn.prop('disabled',false).text('Transfer');
+        if(res.success){
+            alert('Transfer complete.');
+            closeModals();
+            location.reload();
+        } else {
+            alert('Transfer failed: '+(res.data||'Unknown error'));
+        }
+    });
+});
 });

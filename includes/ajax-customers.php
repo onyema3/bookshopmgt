@@ -17,7 +17,7 @@ add_action('wp_ajax_bs_get_customer',function(){
 
 // ── Save customer (admin) ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_save_customer',function(){
-    if(!current_user_can('manage_options')&&!bs_user_can_pos()) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()&&!bs_user_can_pos()) wp_send_json_error('Unauthorized',403);
     $id=intval($_POST['id']??0);
     $res=bs_save_customer($_POST,$id);
     $res ? wp_send_json_success(['id'=>$res]) : wp_send_json_error('Could not save customer');
@@ -85,7 +85,7 @@ add_action('wp_ajax_nopriv_bs_add_reservation','wp_ajax_bs_add_reservation');
 
 // ── Customer purchase history (for admin panel) ───────────────────────────────
 add_action('wp_ajax_bs_get_cust_history',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $id=intval($_GET['id']??0);
     $sales=bs_get_sales(['customer_id'=>$id,'limit'=>100]);
     wp_send_json_success($sales);
