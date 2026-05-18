@@ -51,6 +51,11 @@ add_action('admin_enqueue_scripts',function($hook){
         'export_url' =>admin_url('admin-ajax.php?action=bs_export_sales_csv'),
         'rest_url'   =>esc_url(home_url('/wp-json/bookshop/v1/')),
         'api_key'    =>get_option('bookshop_api_key',''),
+        // Used by the JS to decide whether to expose admin-only actions like
+        // the reconcile button on the per-book breakdown modal. The actual
+        // authorization check happens server-side; this is just so we don't
+        // render a button the user couldn't use anyway.
+        'is_admin'   =>current_user_can('manage_options'),
     ]);
     // Media uploader for logo picker
     if(function_exists('wp_enqueue_media')) wp_enqueue_media();

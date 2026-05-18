@@ -126,6 +126,19 @@ function bs_page_branches(){
                 </label>
             </div>
         </div>
+        <div class='bs-form-group bs-span2' id='bs-branch-reseed-row' style='display:none'>
+            <label>Re-seed missing books</label>
+            <div style='background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;font-size:.85rem;color:#92400e'>
+                <div id='bs-branch-reseed-summary' style='margin-bottom:8px'></div>
+                <div id='bs-branch-reseed-actions' style='display:flex;gap:6px;flex-wrap:wrap'>
+                    <button type='button' class='bs-btn bs-btn-secondary bs-branch-reseed-btn' data-mode='copy' style='font-size:.78rem;padding:5px 10px'>Seed at current global stock</button>
+                    <button type='button' class='bs-btn bs-btn-secondary bs-branch-reseed-btn' data-mode='zero' style='font-size:.78rem;padding:5px 10px'>Seed at zero</button>
+                </div>
+                <div style='font-size:.75rem;color:#78350f;margin-top:6px'>
+                    Existing rows are never overwritten — this only adds rows for books that don't yet have one at this branch.
+                </div>
+            </div>
+        </div>
     </div>";
     bs_modal('bs-branch-modal','Add / Edit Branch',$branch_body,"<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-save-branch'>Save Branch</button>");
     bs_modal('bs-branch-stock-modal','Branch Stock',"<div id='bs-branch-stock-body'>Loading...</div>",'','lg');

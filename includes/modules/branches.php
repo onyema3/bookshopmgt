@@ -85,6 +85,157 @@ function bs_backfill_branch_stock($branch_id, $mode='copy'){
     return $rows;
 }
 
+// ── Drift detection & reconciliation ──────────────────────────────────────────
+// "Drift" means bookshop_books.stock_qty disagrees with the sum of that
+// book's per-branch counts. Two common causes after the v4 migration:
+//
+//   1. Pre-v4 sales decremented only the global stock_qty (branch_id was
+//      NULL on those sale rows), so global is *lower* than the branch sum.
+//   2. A book was added after some branches were created, and those branches
+//      never got a branch_stock row seeded — so the branch sum is *lower*
+//      than global by the missing seed amount.
+//
+// The reconcile flow lets the operator pick which side to trust on a per-book
+// basis. The default reconcile direction is "set global to sum-of-branches"
+// because once multi-branch is on, the per-branch counts are the authoritative
+// source.
+
+/**
+ * List books whose global stock_qty disagrees with the sum of their per-branch
+ * counts. Returns each row with the global value, the branch sum, the delta,
+ * and the count of branches that have a row for the book (so the UI can flag
+ * books that are missing seed rows at one or more branches).
+ *
+ * Pass $book_id to scope to one book, or 0 for the full drift report.
+ * Inactive books are excluded — drift on archived inventory isn't actionable.
+ */
+function bs_get_stock_drift($book_id = 0, $limit = 500) {
+    global $wpdb;
+    $branch_count = intval($wpdb->get_var(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_branches WHERE status='active'"
+    ));
+    $extra_where = '';
+    $params      = [];
+    if ($book_id) {
+        $extra_where = ' AND b.id = %d';
+        $params[]    = intval($book_id);
+    }
+    $params[] = intval($limit);
+    $sql = "SELECT b.id, b.title, b.author, b.isbn, b.stock_qty AS global_qty,
+                   COALESCE(s.branch_sum, 0)    AS branch_sum,
+                   COALESCE(s.branches_with_row, 0) AS branches_with_row,
+                   $branch_count                 AS active_branches
+            FROM {$wpdb->prefix}bookshop_books b
+            LEFT JOIN (
+                SELECT bst.book_id,
+                       SUM(bst.qty) AS branch_sum,
+                       COUNT(*)     AS branches_with_row
+                FROM {$wpdb->prefix}bookshop_branch_stock bst
+                JOIN {$wpdb->prefix}bookshop_branches br
+                  ON br.id = bst.branch_id AND br.status = 'active'
+                GROUP BY bst.book_id
+            ) s ON s.book_id = b.id
+            WHERE b.status = 'active'
+              AND b.stock_qty <> COALESCE(s.branch_sum, 0)
+              $extra_where
+            ORDER BY ABS(b.stock_qty - COALESCE(s.branch_sum, 0)) DESC,
+                     b.title ASC
+            LIMIT %d";
+    return $wpdb->get_results($wpdb->prepare($sql, $params)) ?: [];
+}
+
+/**
+ * Set bookshop_books.stock_qty to the sum of the book's per-branch counts.
+ *
+ * Returns ['ok'=>true,'old'=>N,'new'=>M,'delta'=>diff] on success, or
+ * ['error'=>'…'] on failure. Audits with both old and new value so the
+ * change is reversible by reading the audit log.
+ */
+function bs_reconcile_book_stock($book_id) {
+    global $wpdb;
+    $book_id = intval($book_id);
+    if (!$book_id) return ['error' => 'Missing book_id'];
+    $book = bs_get_book($book_id);
+    if (!$book) return ['error' => 'Book not found'];
+
+    // Sum is taken across active branches only — drift coming from an
+    // inactive (closed) location shouldn't be silently rolled into the
+    // global counter.
+    $sum = intval($wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(SUM(bst.qty), 0)
+         FROM {$wpdb->prefix}bookshop_branch_stock bst
+         JOIN {$wpdb->prefix}bookshop_branches br
+           ON br.id = bst.branch_id AND br.status = 'active'
+         WHERE bst.book_id = %d",
+        $book_id
+    )));
+    $old = intval($book->stock_qty);
+    if ($old === $sum) {
+        return ['ok' => true, 'old' => $old, 'new' => $sum, 'delta' => 0, 'no_change' => true];
+    }
+    $wpdb->update(
+        "{$wpdb->prefix}bookshop_books",
+        ['stock_qty' => $sum],
+        ['id'        => $book_id]
+    );
+    bs_audit(
+        'stock_reconciled', 'book', $book_id,
+        "{$book->title}: global stock_qty $old → $sum (sum across active branches)"
+    );
+    return ['ok' => true, 'old' => $old, 'new' => $sum, 'delta' => $sum - $old];
+}
+
+/**
+ * Reconcile every drifted book in one shot. Returns a summary with per-book
+ * results so the UI can show what changed. Stops at $max books to keep the
+ * response bounded — the usual case is a handful of pre-v4 sales, not thousands.
+ */
+function bs_reconcile_all_drift($max = 500) {
+    $drift = bs_get_stock_drift(0, $max);
+    $results = [];
+    $changed = 0;
+    foreach ($drift as $row) {
+        $r = bs_reconcile_book_stock($row->id);
+        if (!empty($r['ok']) && empty($r['no_change'])) {
+            $changed++;
+            $results[] = [
+                'book_id' => intval($row->id),
+                'title'   => $row->title,
+                'old'     => $r['old'],
+                'new'     => $r['new'],
+                'delta'   => $r['delta'],
+            ];
+        }
+    }
+    bs_audit('stock_reconciled_bulk', 'system', 0, "Reconciled $changed books");
+    return ['changed' => $changed, 'results' => $results];
+}
+
+/**
+ * Count how many active books don't yet have a row in bookshop_branch_stock
+ * for a given branch. Used by the branch-edit UI to decide whether the
+ * "re-seed missing books" prompt is worth showing.
+ *
+ * Returns the count. A non-zero return means a book added after the branch
+ * was created (or skipped during initial backfill) is currently invisible to
+ * stock-take and reorder logic for this branch, and will be rejected by the
+ * oversell guard the moment a cashier tries to sell it from this location.
+ */
+function bs_count_missing_branch_stock_rows($branch_id) {
+    global $wpdb;
+    $branch_id = intval($branch_id);
+    if (!$branch_id) return 0;
+    return intval($wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books b
+         WHERE b.status = 'active'
+           AND NOT EXISTS (
+               SELECT 1 FROM {$wpdb->prefix}bookshop_branch_stock bst
+               WHERE bst.book_id = b.id AND bst.branch_id = %d
+           )",
+        $branch_id
+    )));
+}
+
 // ── User ↔ Branch assignment ──────────────────────────────────────────────────
 // A user has at most one "home" branch (user_meta bookshop_branch_id).
 // Managers and admins are allowed to operate from any active branch.
