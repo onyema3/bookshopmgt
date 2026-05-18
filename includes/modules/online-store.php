@@ -130,7 +130,17 @@ function bs_complete_online_order($order_id){
         'note'           =>$note,
     ]);
 
-    if(empty($res['sale_id'])) return false;
+    // bs_create_sale now returns a structured error (insufficient_stock,
+    // stock_race, empty_cart) instead of throwing. Surface that in the
+    // audit log so a manager can see *why* an online order failed to
+    // materialize as a sale rather than silently leaving it un-linked.
+    if(empty($res['sale_id'])){
+        $reason = $res['error'] ?? 'unknown error';
+        $code   = $res['code']  ?? 'sale_failed';
+        bs_audit('online_order_complete_failed','online_order',$order->id,
+                 "Could not link sale ($code): $reason");
+        return false;
+    }
 
     $wpdb->update(
         "{$wpdb->prefix}bookshop_online_orders",

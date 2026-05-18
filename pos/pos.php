@@ -1085,6 +1085,13 @@ function submitSale(){
         } else {
             if(d.data?.code==='manager_required'){showMgrModal();}
             else if(handleNoBranchError(d)){/* picker shown */}
+            else if(d.data?.code==='insufficient_stock' || d.data?.code==='stock_race'){
+                // Server rejected the sale because branch stock changed under
+                // us (another cashier sold the same title, or the cart asked
+                // for more than is on hand at this branch). Show the message
+                // verbatim — it already names the book and the available qty.
+                alert(d.data.message);
+            }
             else alert('Error: '+(typeof d.data==='string'?d.data:d.data?.message||'Unknown error'));
         }
     });

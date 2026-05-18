@@ -16,6 +16,57 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
         'branch_id'    => 0,
     ]);
 
+    if ( empty($cart) || !is_array($cart) ) {
+        return ['error'=>'Cart is empty','code'=>'empty_cart'];
+    }
+
+    // Aggregate by book_id. A cashier scanning the same title twice ends up
+    // with two cart entries; a per-line stock check would pass each one but
+    // their *sum* could oversell. We sum here and then enforce on the sum.
+    $by_book = [];
+    foreach ( $cart as $item ) {
+        $bid = intval($item['id']);
+        $qty = intval($item['qty']);
+        if ( $bid <= 0 || $qty <= 0 ) continue;
+        $by_book[$bid] = ( $by_book[$bid] ?? 0 ) + $qty;
+    }
+    if ( empty($by_book) ) {
+        return ['error'=>'Cart is empty','code'=>'empty_cart'];
+    }
+
+    $branch_id = intval($o['branch_id']);
+
+    // ── Friendly pre-check ────────────────────────────────────────────────
+    // Read current stock and reject up front so the cashier sees a clear
+    // "Only N in stock for X" message. The actual oversell guard is the
+    // atomic conditional UPDATE below; this is purely for UX so the
+    // common case doesn't surface as a generic race error.
+    foreach ( $by_book as $bid => $needed ) {
+        if ( $branch_id ) {
+            $have = intval( $wpdb->get_var( $wpdb->prepare(
+                "SELECT qty FROM {$wpdb->prefix}bookshop_branch_stock
+                 WHERE branch_id=%d AND book_id=%d",
+                $branch_id, $bid
+            ) ) );
+        } else {
+            $have = intval( $wpdb->get_var( $wpdb->prepare(
+                "SELECT stock_qty FROM {$wpdb->prefix}bookshop_books WHERE id=%d", $bid
+            ) ) );
+        }
+        if ( $have < $needed ) {
+            $title = $wpdb->get_var( $wpdb->prepare(
+                "SELECT title FROM {$wpdb->prefix}bookshop_books WHERE id=%d", $bid
+            ) );
+            return [
+                'error'     => sprintf( 'Only %d in stock for "%s"', $have, $title ?: "book #$bid" ),
+                'code'      => 'insufficient_stock',
+                'book_id'   => $bid,
+                'available' => $have,
+                'requested' => $needed,
+            ];
+        }
+    }
+
     $subtotal = array_sum(array_map(function($i){ return floatval($i['price'])*intval($i['qty']); },$cart));
     $manual_disc = floatval($o['discount']);
     $promo_disc  = 0;
@@ -48,10 +99,74 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
 
     $ref = bs_gen_ref('BS');
 
+    // ── Transaction: stock decrement → sale row → side effects ───────────
+    // Wrapping every write in one transaction means a race-lost decrement,
+    // a failed insert, or an exploding side-effect rolls the whole thing
+    // back. Without this, we used to get a sale row with no stock change
+    // (or vice versa) when anything mid-flight failed.
+    $wpdb->query('START TRANSACTION');
+
+    // For the per-branch path, ensure a branch_stock row exists for every
+    // book in the cart before we issue the conditional UPDATE — otherwise
+    // the UPDATE has nothing to match and looks identical to a race-loss.
+    if ( $branch_id ) {
+        foreach ( array_keys($by_book) as $bid ) {
+            $wpdb->query( $wpdb->prepare(
+                "INSERT IGNORE INTO {$wpdb->prefix}bookshop_branch_stock (branch_id, book_id, qty)
+                 VALUES (%d, %d, 0)",
+                $branch_id, $bid
+            ) );
+        }
+    }
+
+    // Atomic per-book decrement. Each UPDATE only succeeds when there's
+    // still enough stock; if another cashier just sold the last copy we
+    // get affected_rows=0 and roll back. This is the actual oversell
+    // guard — the pre-check above is purely cosmetic.
+    foreach ( $by_book as $bid => $needed ) {
+        if ( $branch_id ) {
+            $ok = $wpdb->query( $wpdb->prepare(
+                "UPDATE {$wpdb->prefix}bookshop_branch_stock
+                    SET qty = qty - %d
+                  WHERE branch_id = %d AND book_id = %d AND qty >= %d",
+                $needed, $branch_id, $bid, $needed
+            ) );
+            // Mirror the decrement in the global stock_qty so cross-branch
+            // aggregates (the catalogue, the inventory tab when no branch
+            // is selected, the slow-mover report's "all branches" path) stay
+            // in sync. GREATEST(0,…) here is defensive — branch stock is
+            // the authoritative gate above, and we don't want a pre-v4
+            // backfill miss to push global negative.
+            $wpdb->query( $wpdb->prepare(
+                "UPDATE {$wpdb->prefix}bookshop_books
+                    SET stock_qty = GREATEST(0, stock_qty - %d)
+                  WHERE id = %d",
+                $needed, $bid
+            ) );
+        } else {
+            // Global-only path (online orders, REST API, no active branch).
+            // Same atomic guarantee against the global stock_qty.
+            $ok = $wpdb->query( $wpdb->prepare(
+                "UPDATE {$wpdb->prefix}bookshop_books
+                    SET stock_qty = stock_qty - %d
+                  WHERE id = %d AND stock_qty >= %d",
+                $needed, $bid, $needed
+            ) );
+        }
+        if ( $ok !== 1 ) {
+            $wpdb->query('ROLLBACK');
+            return [
+                'error'   => 'Stock changed while completing this sale — please try again.',
+                'code'    => 'stock_race',
+                'book_id' => $bid,
+            ];
+        }
+    }
+
     $wpdb->insert("{$wpdb->prefix}bookshop_sales", [
         'sale_ref'        => $ref,
         'staff_id'        => intval($staff_id),
-        'branch_id'       => intval($o['branch_id']) ?: null,
+        'branch_id'       => $branch_id ?: null,
         'customer_id'     => intval($o['customer_id']) ?: null,
         'shift_id'        => intval($o['shift_id']) ?: null,
         'subtotal'        => $subtotal,
@@ -69,9 +184,12 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
     ]);
     $sale_id = $wpdb->insert_id;
 
-    foreach ($cart as $item) {
+    // sale_items uses the *original* (un-aggregated) cart so the receipt
+    // and admin sale-detail view show every scan as a separate line.
+    foreach ( $cart as $item ) {
         $bid   = intval($item['id']);
         $qty   = intval($item['qty']);
+        if ( $bid <= 0 || $qty <= 0 ) continue;
         $price = floatval($item['price']);
         $wpdb->insert("{$wpdb->prefix}bookshop_sale_items", [
             'sale_id'    => $sale_id,
@@ -80,16 +198,6 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
             'unit_price' => $price,
             'line_total' => $price * $qty,
         ]);
-        $wpdb->query($wpdb->prepare(
-            "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=GREATEST(0,stock_qty-%d) WHERE id=%d",
-            $qty, $bid
-        ));
-        // Per-branch stock decrement. Skipped silently when branch_id is 0
-        // (historical / API-only paths) so the global stock is still the
-        // source of truth in those cases.
-        if ( !empty($o['branch_id']) ) {
-            bs_adjust_branch_stock( intval($o['branch_id']), $bid, -$qty );
-        }
     }
 
     // Update promo usage
@@ -127,29 +235,62 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
 
     bs_audit('sale_created','sale',$sale_id,"Sale $ref — Total: ".bs_fmt($total));
 
+    $wpdb->query('COMMIT');
+
     return ['sale_id'=>$sale_id,'ref'=>$ref,'total'=>$total,'tax'=>$tax,'loyalty_earned'=>$loyalty_earned];
 }
 
 function bs_void_sale( $sale_id ) {
     global $wpdb;
+    $sale_id = intval($sale_id);
     $sale = bs_get_sale($sale_id);
-    if (!$sale || $sale->status === 'voided') return false;
-    $wpdb->update("{$wpdb->prefix}bookshop_sales",['status'=>'voided'],['id'=>$sale_id]);
-    // Restore stock
+    if ( !$sale || $sale->status === 'voided' ) return false;
+
+    // ── Transaction: status flip → global restock → branch restock ───────
+    // All three need to commit together. Without a transaction, an
+    // exploding query mid-loop would leave the sale marked voided but with
+    // some line items un-restocked, which then drifts the branch and global
+    // counters apart silently.
+    $wpdb->query('START TRANSACTION');
+
+    // Conditional status flip — guards against two concurrent void attempts
+    // both restoring stock. Whichever transaction commits first wins; the
+    // second sees affected_rows=0 and rolls back without touching stock.
+    $flipped = $wpdb->query( $wpdb->prepare(
+        "UPDATE {$wpdb->prefix}bookshop_sales
+            SET status = 'voided'
+          WHERE id = %d AND status <> 'voided'",
+        $sale_id
+    ) );
+    if ( $flipped !== 1 ) {
+        $wpdb->query('ROLLBACK');
+        return false;
+    }
+
     $items = bs_get_sale_items($sale_id);
-    foreach ($items as $item) {
-        $wpdb->query($wpdb->prepare(
-            "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=stock_qty+%d WHERE id=%d",
-            $item->qty, $item->book_id
-        ));
+    foreach ( $items as $item ) {
+        $bid = intval($item->book_id);
+        $qty = intval($item->qty);
+
+        // Restocking can never go negative, so a direct add is correct here.
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE {$wpdb->prefix}bookshop_books
+                SET stock_qty = stock_qty + %d
+              WHERE id = %d",
+            $qty, $bid
+        ) );
+
         // Mirror the restock at the branch the sale was made from. Sales
-        // recorded before the v4 migration have branch_id=NULL and so are
-        // skipped here (they only ever decremented global stock).
+        // recorded before the v4 migration have branch_id=NULL and only
+        // ever decremented global stock, so we skip them here.
         if ( !empty($sale->branch_id) ) {
-            bs_adjust_branch_stock( intval($sale->branch_id), intval($item->book_id), intval($item->qty) );
+            bs_adjust_branch_stock( intval($sale->branch_id), $bid, $qty );
         }
     }
+
     bs_audit('sale_voided','sale',$sale_id,"Voided sale {$sale->sale_ref}");
+
+    $wpdb->query('COMMIT');
     return true;
 }
 
