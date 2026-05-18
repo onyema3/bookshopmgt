@@ -200,6 +200,68 @@ add_action('wp_ajax_bs_check_reorder',function(){
     wp_send_json_success(['message'=>count($books).' books need reordering — Draft PO created','count'=>count($books),'po_id'=>$po_id]);
 });
 
+// ── Per-branch login: select active branch (POS) ──────────────────────────────
+add_action('wp_ajax_bs_set_active_branch',function(){
+    if(!bs_user_can_pos()) wp_send_json_error('Unauthorized',403);
+    if(!bs_verify('bs_pos_nonce')) wp_send_json_error('Bad nonce',403);
+
+    $uid       = get_current_user_id();
+    $branch_id = intval($_POST['branch_id'] ?? 0);
+
+    // Block branch switching while a shift is open — closing the shift first
+    // prevents cash variance accounting from spanning two locations.
+    $open_shift = bs_get_open_shift($uid);
+    $current    = bs_get_active_branch_id($uid);
+    if($open_shift && $branch_id !== intval($current)){
+        wp_send_json_error([
+            'code'    => 'shift_open',
+            'message' => 'Close your current shift before switching branches.',
+        ]);
+    }
+
+    $res = bs_set_active_branch_id($uid, $branch_id);
+    if($res === true){
+        $b = $branch_id ? bs_get_branch($branch_id) : null;
+        bs_audit('branch_session_set','user',$uid,$b?"Active branch: {$b->name}":'Active branch cleared');
+        wp_send_json_success([
+            'branch_id'   => $branch_id,
+            'branch_name' => $b ? $b->name : '',
+        ]);
+    }
+    $msg = [
+        'invalid_branch' => 'That branch is not active.',
+        'forbidden'      => 'You are not assigned to that branch.',
+        'no_user'        => 'Not signed in.',
+    ];
+    wp_send_json_error($msg[$res] ?? 'Could not set branch');
+});
+
+// ── Per-branch login: admin assigns home branch to a staff user ───────────────
+add_action('wp_ajax_bs_admin_set_user_branch',function(){
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
+    if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce',403);
+
+    $uid       = intval($_POST['user_id']   ?? 0);
+    $branch_id = intval($_POST['branch_id'] ?? 0);
+    if(!$uid) wp_send_json_error('Missing user_id');
+
+    if(!bs_set_user_branch($uid,$branch_id)){
+        wp_send_json_error('Invalid branch');
+    }
+
+    // If the user we just reassigned has a stale active branch they no longer
+    // belong to, clear it so they get the picker again next login.
+    if($branch_id){
+        $active = bs_get_active_branch_id($uid);
+        if($active && $active !== $branch_id && !bs_user_can_manage($uid)){
+            delete_user_meta($uid, BS_USER_ACTIVE_BRANCH_META);
+        }
+    } else {
+        delete_user_meta($uid, BS_USER_ACTIVE_BRANCH_META);
+    }
+    wp_send_json_success(['user_id'=>$uid,'branch_id'=>$branch_id]);
+});
+
 // ── Online Orders ─────────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_update_online_order_status',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);

@@ -4,6 +4,7 @@ if(!defined('ABSPATH'))exit;
 function bs_page_staff(){
     $staff=get_users(['role__in'=>['bookshop_staff','bookshop_manager','administrator'],'orderby'=>'display_name']);
     $audit=bs_get_audit_log(['limit'=>100]);
+    $branches=bs_get_branches(false);
     ?>
     <div class="wrap bs-wrap">
     <div class="bs-header"><h1>👤 Staff Management</h1></div>
@@ -15,17 +16,38 @@ function bs_page_staff(){
 
     <div id="staff-list-tab" class="bs-tab-content">
     <table class="bs-table">
-        <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>POS PIN</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Username</th><th>Email</th><th>Role</th><th>Home Branch</th><th>POS PIN</th><th>Actions</th></tr></thead>
         <tbody>
         <?php foreach($staff as $u):
             $roles=array_intersect($u->roles,['bookshop_staff','bookshop_manager','administrator']);
             $has_pin=!empty(get_user_meta($u->ID,'bookshop_pin',true));
+            $is_mgr=bs_user_can_manage($u->ID);
+            $home_id=intval(bs_get_user_branch($u->ID));
+            $home_branch=$home_id?bs_get_branch($home_id):null;
         ?>
         <tr>
             <td><strong><?=esc_html($u->display_name)?></strong></td>
             <td><?=esc_html($u->user_login)?></td>
             <td><?=esc_html($u->user_email)?></td>
             <td><?=esc_html(implode(', ',$roles))?></td>
+            <td>
+                <?php if($is_mgr): ?>
+                    <span style="font-size:.78rem;color:var(--muted)">All branches</span>
+                <?php else: ?>
+                    <select class="bs-input bs-staff-branch" data-uid="<?=esc_attr($u->ID)?>" style="font-size:.82rem;padding:4px 8px;max-width:180px">
+                        <option value="0">— Unassigned —</option>
+                        <?php foreach($branches as $b):
+                            $sel=($home_id===intval($b->id))?'selected':'';
+                            $disabled=($b->status!=='active' && $home_id!==intval($b->id))?'disabled':'';
+                        ?>
+                        <option value="<?=esc_attr($b->id)?>" <?=$sel?> <?=$disabled?>>
+                            <?=esc_html($b->name)?><?=$b->status!=='active'?' (inactive)':''?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <span class="bs-staff-branch-status" data-uid="<?=esc_attr($u->ID)?>" style="font-size:.72rem;color:var(--muted);margin-left:4px"></span>
+                <?php endif; ?>
+            </td>
             <td><?=$has_pin?'<span class="bs-badge bs-badge-active">Set</span>':'<span class="bs-badge bs-badge-inactive">Not set</span>'?></td>
             <td>
                 <button class="bs-btn bs-btn-secondary bs-set-pin" data-id="<?=esc_attr($u->ID)?>" data-name="<?=esc_attr($u->display_name)?>" style="font-size:.78rem;padding:4px 10px">Set PIN</button>
@@ -36,7 +58,7 @@ function bs_page_staff(){
         </tbody>
     </table>
     <p style="margin-top:16px;font-size:.85rem;color:#888">
-        To add POS staff: <a href="<?=admin_url('user-new.php')?>">Create a new user</a> and assign the <strong>Bookshop Staff</strong> or <strong>Bookshop Manager</strong> role. Managers can approve high discounts and void sales.
+        To add POS staff: <a href="<?=admin_url('user-new.php')?>">Create a new user</a> and assign the <strong>Bookshop Staff</strong> or <strong>Bookshop Manager</strong> role. Managers can approve high discounts, void sales, and operate any branch.
     </p>
     </div>
 

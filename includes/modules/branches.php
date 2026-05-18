@@ -30,6 +30,73 @@ function bs_save_branch($data,$id=0){
     return $wpdb->insert_id;
 }
 
+// ── User ↔ Branch assignment ──────────────────────────────────────────────────
+// A user has at most one "home" branch (user_meta bookshop_branch_id).
+// Managers and admins are allowed to operate from any active branch.
+// At runtime, the currently-selected branch lives in user_meta
+// bookshop_active_branch_id and is also reflected on the open shift.
+
+const BS_USER_HOME_BRANCH_META   = 'bookshop_branch_id';
+const BS_USER_ACTIVE_BRANCH_META = 'bookshop_active_branch_id';
+
+function bs_get_user_branch($uid=0){
+    if(!$uid) $uid=get_current_user_id();
+    if(!$uid) return 0;
+    return intval(get_user_meta($uid,BS_USER_HOME_BRANCH_META,true));
+}
+
+function bs_set_user_branch($uid,$branch_id){
+    $uid=intval($uid); $branch_id=intval($branch_id);
+    if(!$uid) return false;
+    if($branch_id===0){
+        delete_user_meta($uid,BS_USER_HOME_BRANCH_META);
+        bs_audit('user_branch_cleared','user',$uid,"Home branch cleared");
+        return true;
+    }
+    if(!bs_get_branch($branch_id)) return false;
+    update_user_meta($uid,BS_USER_HOME_BRANCH_META,$branch_id);
+    bs_audit('user_branch_set','user',$uid,"Home branch set to $branch_id");
+    return true;
+}
+
+// Branches this user is allowed to operate from.
+// - Admin / manager: every active branch.
+// - Staff: their assigned home branch only (if set).
+function bs_user_branches($uid=0){
+    if(!$uid) $uid=get_current_user_id();
+    if(!$uid) return [];
+    if(bs_user_can_manage($uid)) return bs_get_branches(true);
+    $home=bs_get_user_branch($uid);
+    if(!$home) return [];
+    $b=bs_get_branch($home);
+    return ($b && $b->status==='active') ? [$b] : [];
+}
+
+function bs_get_active_branch_id($uid=0){
+    if(!$uid) $uid=get_current_user_id();
+    if(!$uid) return 0;
+    return intval(get_user_meta($uid,BS_USER_ACTIVE_BRANCH_META,true));
+}
+
+// Set the active branch for the current session. Returns true on success,
+// or a string error code: 'no_user' / 'invalid_branch' / 'forbidden'.
+function bs_set_active_branch_id($uid,$branch_id){
+    $uid=intval($uid); $branch_id=intval($branch_id);
+    if(!$uid) return 'no_user';
+    if($branch_id===0){
+        delete_user_meta($uid,BS_USER_ACTIVE_BRANCH_META);
+        return true;
+    }
+    $branch=bs_get_branch($branch_id);
+    if(!$branch || $branch->status!=='active') return 'invalid_branch';
+    $allowed=bs_user_branches($uid);
+    $ok=false;
+    foreach($allowed as $b){ if(intval($b->id)===$branch_id){ $ok=true; break; } }
+    if(!$ok) return 'forbidden';
+    update_user_meta($uid,BS_USER_ACTIVE_BRANCH_META,$branch_id);
+    return true;
+}
+
 // ── Branch stock (separate stock per branch) ──────────────────────────────────
 function bs_get_branch_stock($branch_id,$book_id=0){
     global $wpdb;

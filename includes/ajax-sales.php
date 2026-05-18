@@ -29,6 +29,20 @@ add_action('wp_ajax_bs_submit_sale', function() {
     }
 
     $shift  = bs_get_open_shift( get_current_user_id() );
+
+    // Branch is required for every sale. Trust the open shift first (the user
+    // already passed the branch gate when opening it), fall back to the
+    // session's active branch as a safety net for shift-less workflows.
+    $branch_id = $shift && $shift->branch_id
+        ? intval($shift->branch_id)
+        : bs_get_active_branch_id( get_current_user_id() );
+    if ( !$branch_id ) {
+        wp_send_json_error([
+            'code'    => 'no_branch',
+            'message' => 'Select a branch before completing a sale.',
+        ]);
+    }
+
     $result = bs_create_sale( $cart, get_current_user_id(), [
         'customer_id'     => $cid,
         'payment'         => $payment,
@@ -39,6 +53,7 @@ add_action('wp_ajax_bs_submit_sale', function() {
         'loyalty_redeem'  => $loyalty,
         'note'            => $note,
         'shift_id'        => $shift ? $shift->id : 0,
+        'branch_id'       => $branch_id,
     ]);
     wp_send_json_success($result);
 });
@@ -90,8 +105,33 @@ add_action('wp_ajax_bs_send_receipt_email', function() {
 add_action('wp_ajax_bs_open_shift', function() {
     if ( !bs_user_can_pos() ) wp_send_json_error('Unauthorized', 403);
     if ( !bs_verify('bs_pos_nonce') ) wp_send_json_error('Bad nonce');
-    $id = bs_open_shift( get_current_user_id(), floatval($_POST['opening_cash'] ?? 0) );
-    wp_send_json_success(['shift_id' => $id]);
+
+    $uid = get_current_user_id();
+
+    // Branch is required to open a shift. Prefer the active session branch,
+    // fall back to the staff's home branch. Either way, the user must be
+    // allowed to operate from it.
+    $branch_id = bs_get_active_branch_id($uid) ?: bs_get_user_branch($uid);
+    if ( !$branch_id ) {
+        wp_send_json_error([
+            'code'    => 'no_branch',
+            'message' => 'Select a branch before opening a shift.',
+        ]);
+    }
+    $allowed = false;
+    foreach ( bs_user_branches($uid) as $b ) {
+        if ( intval($b->id) === intval($branch_id) ) { $allowed = true; break; }
+    }
+    if ( !$allowed ) {
+        wp_send_json_error([
+            'code'    => 'forbidden_branch',
+            'message' => 'You are not assigned to that branch.',
+        ]);
+    }
+
+    $res = bs_open_shift( $uid, floatval($_POST['opening_cash'] ?? 0), $branch_id );
+    if ( isset($res['error']) ) wp_send_json_error($res['error']);
+    wp_send_json_success(['shift_id' => $res['shift_id'], 'branch_id' => $branch_id]);
 });
 
 // ── POS: Shift close ──────────────────────────────────────────────────────────

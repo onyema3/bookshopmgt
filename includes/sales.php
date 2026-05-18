@@ -13,6 +13,7 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
         'loyalty_redeem' => 0,
         'note'         => '',
         'shift_id'     => 0,
+        'branch_id'    => 0,
     ]);
 
     $subtotal = array_sum(array_map(function($i){ return floatval($i['price'])*intval($i['qty']); },$cart));
@@ -50,6 +51,7 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
     $wpdb->insert("{$wpdb->prefix}bookshop_sales", [
         'sale_ref'        => $ref,
         'staff_id'        => intval($staff_id),
+        'branch_id'       => intval($o['branch_id']) ?: null,
         'customer_id'     => intval($o['customer_id']) ?: null,
         'shift_id'        => intval($o['shift_id']) ?: null,
         'subtotal'        => $subtotal,

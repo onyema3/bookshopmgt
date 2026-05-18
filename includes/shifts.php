@@ -1,14 +1,22 @@
 <?php
 if(!defined('ABSPATH'))exit;
 
-function bs_open_shift($staff_id,$opening_cash){
+function bs_open_shift($staff_id,$opening_cash,$branch_id=0){
     global $wpdb;
+    $branch_id=intval($branch_id);
+    if(!$branch_id) return ['error'=>'No branch selected'];
+    if(!bs_get_branch($branch_id)) return ['error'=>'Invalid branch'];
     // Close any open shift for this staff first
     $wpdb->query($wpdb->prepare("UPDATE {$wpdb->prefix}bookshop_shifts SET status='closed',closed_at=NOW() WHERE staff_id=%d AND status='open'",$staff_id));
-    $wpdb->insert("{$wpdb->prefix}bookshop_shifts",['staff_id'=>$staff_id,'opening_cash'=>floatval($opening_cash),'status'=>'open']);
+    $wpdb->insert("{$wpdb->prefix}bookshop_shifts",[
+        'staff_id'    =>$staff_id,
+        'branch_id'   =>$branch_id,
+        'opening_cash'=>floatval($opening_cash),
+        'status'      =>'open',
+    ]);
     $id=$wpdb->insert_id;
-    bs_audit('shift_opened','shift',$id,"Opening cash: ".bs_fmt($opening_cash));
-    return $id;
+    bs_audit('shift_opened','shift',$id,"Opening cash: ".bs_fmt($opening_cash).", branch $branch_id");
+    return ['shift_id'=>$id];
 }
 function bs_close_shift($shift_id,$closing_cash,$notes=''){
     global $wpdb;
