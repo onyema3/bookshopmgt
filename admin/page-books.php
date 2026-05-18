@@ -1,0 +1,137 @@
+<?php
+if(!defined('ABSPATH'))exit;
+
+function bs_page_books(){
+    $books=bs_get_books(['status'=>'','limit'=>500]);
+    $genres=bs_genres();
+    $total_books=bs_count_books('active');
+    global $wpdb;
+    $low_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty<=low_stock_threshold");
+    $out_stock=$wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}bookshop_books WHERE status='active' AND stock_qty=0");
+    ?>
+    <div class="wrap bs-wrap">
+    <div class="bs-header">
+        <h1>📚 Books Inventory</h1>
+        <div style="display:flex;gap:8px">
+            <button class="bs-btn bs-btn-secondary" id="bs-import-csv-btn">⬆ Import CSV</button>
+            <?php if(bs_woo_active()): ?>
+            <button class="bs-btn bs-btn-secondary" id="bs-import-woo-btn">🛒 Import WooCommerce</button>
+            <?php endif; ?>
+            <button class="bs-btn bs-btn-primary" id="bs-add-book">+ Add Book</button>
+        </div>
+    </div>
+
+    <div class="bs-stats-row">
+        <?php bs_stat($total_books,'Total Books');
+        bs_stat($low_stock,'Low Stock','amber');
+        bs_stat($out_stock,'Out of Stock','red'); ?>
+    </div>
+
+    <div class="bs-toolbar">
+        <input type="text" id="bs-book-search" placeholder="🔍 Search title, author, ISBN..." class="bs-search">
+        <select id="bs-genre-filter" class="bs-select">
+            <option value="">All Genres</option>
+            <?php foreach($genres as $g) echo "<option>".esc_html($g)."</option>"; ?>
+        </select>
+        <select id="bs-status-filter" class="bs-select">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.85rem">
+            <input type="checkbox" id="bs-low-stock-filter"> Low stock only
+        </label>
+    </div>
+
+    <table class="bs-table" id="bs-books-table">
+        <thead><tr>
+            <th>Cover</th><th>Title / Author</th><th>ISBN</th><th>Genre</th>
+            <th>Location</th><th>Cost</th><th>Price</th><th>Margin</th><th>Stock</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+        <?php foreach($books as $b):
+            $margin=$b->sell_price>0?round((($b->sell_price-$b->cost_price)/$b->sell_price)*100,1):0;
+            $stock_cls=$b->stock_qty==0?'bs-out-stock':($b->stock_qty<=$b->low_stock_threshold?'bs-low-stock':'');
+        ?>
+        <tr data-id="<?=esc_attr($b->id)?>" data-title="<?=esc_attr(strtolower($b->title))?>"
+            data-author="<?=esc_attr(strtolower($b->author))?>" data-isbn="<?=esc_attr($b->isbn)?>"
+            data-genre="<?=esc_attr(strtolower($b->genre))?>" data-status="<?=esc_attr($b->status)?>"
+            data-stock="<?=intval($b->stock_qty)?>" data-threshold="<?=intval($b->low_stock_threshold)?>">
+            <td><?php if($b->cover_url): ?><img src="<?=esc_url($b->cover_url)?>" class="bs-cover-thumb"><?php else: ?><span class="bs-no-cover">📖</span><?php endif; ?></td>
+            <td><strong><?=esc_html($b->title)?></strong><br><small class="bs-muted"><?=esc_html($b->author)?></small>
+                <?php if($b->location): ?><br><span class="bs-tag">📍 <?=esc_html($b->location)?></span><?php endif; ?></td>
+            <td><code><?=esc_html($b->isbn)?></code></td>
+            <td><?=esc_html($b->genre)?></td>
+            <td><?=esc_html($b->location)?></td>
+            <td><?=bs_fmt($b->cost_price)?></td>
+            <td><?=bs_fmt($b->sell_price)?></td>
+            <td><span class="bs-margin <?=$margin>30?'bs-margin-good':($margin>10?'bs-margin-ok':'bs-margin-low')?>"><?=$margin?>%</span></td>
+            <td class="<?=$stock_cls?>" style="display:flex;align-items:center;gap:6px">
+                <span><?=intval($b->stock_qty)?></span>
+                <button class="bs-icon-btn bs-adjust-stock" title="Adjust stock" data-id="<?=esc_attr($b->id)?>" data-qty="<?=intval($b->stock_qty)?>">✏️</button>
+            </td>
+            <td><span class="bs-badge bs-badge-<?=$b->status?>"><?=$b->status?></span></td>
+            <td>
+                <button class="bs-icon-btn bs-edit-book" data-id="<?=esc_attr($b->id)?>" title="Edit">✏️</button>
+                <button class="bs-icon-btn bs-delete-book" data-id="<?=esc_attr($b->id)?>" title="Archive">🗑️</button>
+            </td>
+        </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    </div>
+
+    <?php
+    // Book modal
+    ob_start(); ?>
+    <input type="hidden" id="bs-book-id">
+    <div class="bs-form-grid">
+        <div class="bs-form-group bs-span2">
+            <label>ISBN / Barcode</label>
+            <div style="display:flex;gap:8px">
+                <input type="text" id="bs-f-isbn" class="bs-input" placeholder="Enter ISBN then click lookup">
+                <button class="bs-btn bs-btn-secondary" id="bs-isbn-lookup" type="button">🔍 Lookup</button>
+            </div>
+        </div>
+        <div class="bs-form-group bs-span2">
+            <label>Title *</label>
+            <input type="text" id="bs-f-title" class="bs-input" required>
+        </div>
+        <div class="bs-form-group"><label>Author</label><input type="text" id="bs-f-author" class="bs-input"></div>
+        <div class="bs-form-group"><label>Genre</label><input type="text" id="bs-f-genre" class="bs-input" list="bs-genre-list">
+            <datalist id="bs-genre-list">
+                <?php foreach(['Fiction','Non-Fiction','Science','History','Biography','Children','Romance','Thriller','Religion','Academic','Self-Help','Business','Poetry','Travel'] as $g) echo "<option>$g</option>"; ?>
+            </datalist>
+        </div>
+        <div class="bs-form-group"><label>Publisher</label><input type="text" id="bs-f-publisher" class="bs-input"></div>
+        <div class="bs-form-group"><label>Year</label><input type="number" id="bs-f-year" class="bs-input" min="1800" max="2099"></div>
+        <div class="bs-form-group"><label>Cost Price (<?=bs_currency()?>)</label><input type="number" id="bs-f-cost" class="bs-input" step="0.01" min="0"></div>
+        <div class="bs-form-group"><label>Selling Price (<?=bs_currency()?>)</label><input type="number" id="bs-f-price" class="bs-input" step="0.01" min="0"></div>
+        <div class="bs-form-group"><label>Stock Qty</label><input type="number" id="bs-f-stock" class="bs-input" min="0"></div>
+        <div class="bs-form-group"><label>Low Stock Alert At</label><input type="number" id="bs-f-threshold" class="bs-input" min="0" value="5"></div>
+        <div class="bs-form-group"><label>Shelf Location</label><input type="text" id="bs-f-location" class="bs-input" placeholder="e.g. A3, Shelf 2"></div>
+        <div class="bs-form-group"><label>Barcode</label><input type="text" id="bs-f-barcode" class="bs-input"></div>
+        <div class="bs-form-group"><label>Status</label>
+            <select id="bs-f-status" class="bs-input"><option value="active">Active</option><option value="inactive">Inactive</option></select>
+        </div>
+        <div class="bs-form-group bs-span2"><label>Cover Image URL</label><input type="url" id="bs-f-cover" class="bs-input"></div>
+        <div class="bs-form-group bs-span2"><label>Description</label><textarea id="bs-f-desc" class="bs-input" rows="3"></textarea></div>
+        <div class="bs-form-group bs-span2" id="bs-margin-preview" style="background:#f5efe4;border-radius:8px;padding:10px;display:none">
+            <strong>Margin Preview:</strong> <span id="bs-margin-val"></span>
+        </div>
+    </div>
+    <?php $body=ob_get_clean();
+    bs_modal('bs-book-modal','Add / Edit Book',$body,
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-save-book'>Save Book</button>",'lg');
+
+    // CSV import modal
+    ob_start(); ?>
+    <p>Download the <a href="#" id="bs-csv-template">CSV template</a> and fill it in before importing.</p>
+    <input type="file" id="bs-csv-file" accept=".csv" class="bs-input" style="margin-top:10px">
+    <div id="bs-import-result" style="margin-top:12px"></div>
+    <?php $body=ob_get_clean();
+    bs_modal('bs-import-modal','Import Books (CSV)',$body,
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Close</button><button class='bs-btn bs-btn-primary' id='bs-do-import'>Import</button>");
+    ?>
+    <?php
+}

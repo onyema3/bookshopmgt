@@ -1,0 +1,890 @@
+/* Bookshop Manager Pro — Admin JS */
+jQuery(function($){
+const {ajax_url,nonce,export_url}=BSAdmin;
+const currency=BSAdmin.currency||'₦';
+
+// ── Utils ────────────────────────────────────────────────────
+function fmt(n){return currency+parseFloat(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+function esc(s){return $('<div>').text(s||'').html();}
+function post(data){return $.post(ajax_url,{...data,nonce});}
+function get(data){return $.get(ajax_url,data);}
+function openModal(id){
+    // Set display:flex directly so centering works, then animate opacity via CSS
+    $(id).css({display:'flex',opacity:0}).animate({opacity:1},180);
+}
+function closeModals(){
+    $('.bs-modal').animate({opacity:0},160,function(){$(this).css('display','none');});
+}
+$(document).on('click','.bs-modal-close',closeModals);
+$(document).on('click','.bs-modal',function(e){if($(e.target).is('.bs-modal'))closeModals();});
+
+// ── Tabs ─────────────────────────────────────────────────────
+$(document).on('click','.bs-tab',function(){
+    const tab=$(this).data('tab');
+    $(this).addClass('active').siblings('.bs-tab').removeClass('active');
+    $('.bs-tab-content').hide();$('#'+tab).show();
+});
+
+// ── Books: Filter ─────────────────────────────────────────────
+function filterBooks(){
+    const q=$('#bs-book-search').val().toLowerCase();
+    const g=$('#bs-genre-filter').val().toLowerCase();
+    const s=$('#bs-status-filter').val();
+    const lowOnly=$('#bs-low-stock-filter').is(':checked');
+    $('#bs-books-table tbody tr').each(function(){
+        const title =$(this).data('title')||'';
+        const author=$(this).data('author')||'';
+        const isbn  =$(this).data('isbn')||'';
+        const genre =$(this).data('genre')||'';
+        const status=$(this).data('status')||'';
+        const stock =parseInt($(this).data('stock'))||0;
+        const thr   =parseInt($(this).data('threshold'))||5;
+        const mQ=!q||(title+author+isbn).includes(q);
+        const mG=!g||genre===g;
+        const mS=!s||status===s;
+        const mL=!lowOnly||stock<=thr;
+        $(this).toggle(mQ&&mG&&mS&&mL);
+    });
+}
+$('#bs-book-search,#bs-genre-filter,#bs-status-filter').on('input change',filterBooks);
+$('#bs-low-stock-filter').on('change',filterBooks);
+
+// ── Books: margin preview ─────────────────────────────────────
+function updateMarginPreview(){
+    const cost=parseFloat($('#bs-f-cost').val())||0;
+    const price=parseFloat($('#bs-f-price').val())||0;
+    if(price>0){
+        const m=((price-cost)/price*100).toFixed(1);
+        const profit=(price-cost).toFixed(2);
+        $('#bs-margin-val').text(`${m}% margin — Profit per unit: ${currency}${profit}`);
+        $('#bs-margin-preview').show();
+    } else $('#bs-margin-preview').hide();
+}
+$(document).on('input','#bs-f-cost,#bs-f-price',updateMarginPreview);
+
+// ── Books: ISBN lookup ────────────────────────────────────────
+$(document).on('click','#bs-isbn-lookup',function(){
+    const isbn=$('#bs-f-isbn').val().trim().replace(/[^0-9Xx]/g,'').toUpperCase();
+    if(!isbn){alert('Enter an ISBN first');return;}
+    const btn=$(this).prop('disabled',true).text('⏳ Searching…');
+    $.ajax({
+        url: ajax_url,
+        method: 'GET',
+        data: {action:'bs_lookup_isbn', isbn},
+        timeout: 12000
+    }).done(function(res){
+        btn.prop('disabled',false).text('🔍 Lookup');
+        if(res && res.success){
+            const d=res.data;
+            if(d.title)        $('#bs-f-title').val(d.title);
+            if(d.author)       $('#bs-f-author').val(d.author);
+            if(d.publisher)    $('#bs-f-publisher').val(d.publisher);
+            if(d.publish_year) $('#bs-f-year').val(d.publish_year);
+            if(d.description)  $('#bs-f-desc').val(d.description);
+            if(d.cover_url)    $('#bs-f-cover').val(d.cover_url);
+            if(d.genre)        $('#bs-f-genre').val(d.genre);
+            // Show a small confirmation
+            btn.text('✓ Found!');
+            setTimeout(()=>btn.text('🔍 Lookup'),2000);
+        } else {
+            alert('Not found in Google Books or Open Library. Fill in the details manually.');
+        }
+    }).fail(function(){
+        btn.prop('disabled',false).text('🔍 Lookup');
+        alert('Lookup failed — check your internet connection or fill in manually.');
+    });
+});
+
+// ── Books: Add/Edit/Save ──────────────────────────────────────
+function clearBookForm(){
+    $('#bs-book-id').val('');
+    ['title','author','isbn','genre','publisher','year','cost','price','stock','threshold','location','barcode','cover','desc'].forEach(f=>{
+        const el=$(`#bs-f-${f}`);
+        el.is('select')?el.val('active'):el.val('');
+    });
+    $('#bs-f-status').val('active');
+    $('#bs-f-threshold').val(5);
+    $('#bs-margin-preview').hide();
+}
+$(document).on('click','#bs-add-book',function(){
+    clearBookForm();
+    $('#bs-modal-title').text('Add New Book');
+    openModal('#bs-book-modal');
+});
+$(document).on('click','.bs-edit-book',function(){
+    get({action:'bs_get_book',id:$(this).data('id')}).then(res=>{
+        if(!res.success)return alert('Could not load book.');
+        const b=res.data;
+        $('#bs-book-id').val(b.id);
+        $('#bs-f-isbn').val(b.isbn);$('#bs-f-title').val(b.title);$('#bs-f-author').val(b.author);
+        $('#bs-f-genre').val(b.genre);$('#bs-f-publisher').val(b.publisher);$('#bs-f-year').val(b.publish_year);
+        $('#bs-f-cost').val(b.cost_price);$('#bs-f-price').val(b.sell_price);$('#bs-f-stock').val(b.stock_qty);
+        $('#bs-f-threshold').val(b.low_stock_threshold);$('#bs-f-location').val(b.location);
+        $('#bs-f-barcode').val(b.barcode);$('#bs-f-cover').val(b.cover_url);$('#bs-f-desc').val(b.description);
+        $('#bs-f-status').val(b.status);
+        $('#bs-modal-title').text('Edit Book');openModal('#bs-book-modal');
+        updateMarginPreview();
+    });
+});
+$(document).on('click','#bs-save-book',function(){
+    const title=$('#bs-f-title').val().trim();
+    if(!title){alert('Title is required before saving.');return;}
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    $.ajax({
+        url: ajax_url,
+        method: 'POST',
+        timeout: 15000,
+        data: {
+            action:       'bs_save_book',
+            id:           $('#bs-book-id').val()||0,
+            title:        title,
+            author:       $('#bs-f-author').val(),
+            isbn:         $('#bs-f-isbn').val(),
+            genre:        $('#bs-f-genre').val(),
+            publisher:    $('#bs-f-publisher').val(),
+            publish_year: $('#bs-f-year').val(),
+            cost_price:   $('#bs-f-cost').val()||0,
+            sell_price:   $('#bs-f-price').val()||0,
+            stock_qty:    $('#bs-f-stock').val()||0,
+            low_stock_threshold: $('#bs-f-threshold').val()||5,
+            location:     $('#bs-f-location').val(),
+            barcode:      $('#bs-f-barcode').val(),
+            cover_url:    $('#bs-f-cover').val(),
+            description:  $('#bs-f-desc').val(),
+            status:       $('#bs-f-status').val()||'active',
+        }
+    }).done(function(res){
+        btn.prop('disabled',false).text('Save Book');
+        if(res && res.success){
+            location.reload();
+        } else {
+            alert('Save failed: '+(res.data||'Unknown error. Check the book title is filled in.'));
+        }
+    }).fail(function(xhr){
+        btn.prop('disabled',false).text('Save Book');
+        alert('Request failed ('+xhr.status+'). You may need to log in again.');
+    });
+});
+$(document).on('click','.bs-delete-book',function(){
+    if(!confirm('Archive this book?'))return;
+    const id=$(this).data('id'),row=$(this).closest('tr');
+    post({action:'bs_delete_book',id}).then(res=>{if(res.success)row.fadeOut(300,()=>row.remove());});
+});
+$(document).on('click','.bs-adjust-stock',function(){
+    const id=$(this).data('id'),curr=$(this).data('qty');
+    const qty=prompt('New stock quantity:',curr);
+    if(qty===null||isNaN(qty))return;
+    post({action:'bs_adjust_stock',id,qty:parseInt(qty)}).then(res=>{if(res.success)location.reload();});
+});
+
+// ── Books: Import CSV ─────────────────────────────────────────
+$('#bs-import-csv-btn').on('click',()=>openModal('#bs-import-modal'));
+$('#bs-csv-template').on('click',function(e){
+    e.preventDefault();
+    const rows=[['title','author','isbn','genre','publisher','publish_year','cost_price','sell_price','stock_qty','description'],
+                ['Example Book','John Doe','9780000000000','Fiction','Publisher',2024,500,800,10,'A great book']];
+    let csv=rows.map(r=>r.join(',')).join('\n');
+    const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+    a.download='bookshop-template.csv';a.click();
+});
+$('#bs-do-import').on('click',function(){
+    const file=$('#bs-csv-file')[0].files[0];
+    if(!file){alert('Select a CSV file');return;}
+    const fd=new FormData();fd.append('action','bs_import_csv');fd.append('nonce',nonce);fd.append('csv',file);
+    const btn=$(this).prop('disabled',true).text('Importing…');
+    $.ajax({url:ajax_url,type:'POST',data:fd,contentType:false,processData:false}).then(res=>{
+        btn.prop('disabled',false).text('Import');
+        if(res.success){
+            const d=res.data;
+            let msg=`<strong style="color:green">✓ Imported ${d.imported} book(s)</strong>`;
+            if(d.errors&&d.errors.length)msg+=`<br><small style="color:red">${d.errors.join('<br>')}</small>`;
+            $('#bs-import-result').html(msg);
+            setTimeout(()=>location.reload(),1500);
+        } else $('#bs-import-result').html('<span style="color:red">Import failed.</span>');
+    });
+});
+$('#bs-import-woo-btn').on('click',function(){
+    if(!confirm('Import products from WooCommerce?'))return;
+    $(this).prop('disabled',true).text('Importing…');
+    post({action:'bs_import_woo'}).then(res=>{
+        $(this).prop('disabled',false).text('🛒 Import WooCommerce');
+        if(res.success)alert('Imported '+res.data.imported+' products.');
+        else alert('Import failed or WooCommerce not active.');
+    });
+});
+
+// ── Sales: View items ─────────────────────────────────────────
+$(document).on('click','.bs-view-sale-items',function(){
+    const id=$(this).data('id'),ref=$(this).data('ref');
+    $('#bs-sale-items-modal .bs-modal-header h2').text('Items — '+ref);
+    $('#bs-sale-items-body').html('<em>Loading…</em>');
+    openModal('#bs-sale-items-modal');
+    get({action:'bs_get_sale_items',id}).then(res=>{
+        if(!res.success){$('#bs-sale-items-body').html('<em>Error.</em>');return;}
+        let html='<table class="bs-table bs-table-sm"><thead><tr><th>Title</th><th>Author</th><th>ISBN</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead><tbody>';
+        res.data.forEach(i=>html+=`<tr><td>${esc(i.title)}</td><td>${esc(i.author)}</td><td>${esc(i.isbn)}</td><td>${i.qty}</td><td>${fmt(i.unit_price)}</td><td><strong>${fmt(i.line_total)}</strong></td></tr>`);
+        html+='</tbody></table>';
+        $('#bs-sale-items-body').html(html);
+    });
+});
+$(document).on('click','.bs-void-sale',function(){
+    if(!confirm('Void this sale? Stock will be restored.'))return;
+    post({action:'bs_void_sale',id:$(this).data('id')}).then(res=>{
+        if(res.success)location.reload();else alert('Cannot void sale.');
+    });
+});
+
+// ── Sales: Reservation status ─────────────────────────────────
+$(document).on('change','.bs-res-status-select',function(){
+    post({action:'bs_update_reservation',id:$(this).data('id'),status:$(this).val()});
+});
+
+// ── Customers ─────────────────────────────────────────────────
+function filterCustomers(){
+    const q=$('#bs-cust-search').val().toLowerCase();
+    $('#bs-cust-table tbody tr').each(function(){
+        const n=$(this).data('name')||'';
+        const p=$(this).data('phone')||'';
+        const e=$(this).data('email')||'';
+        $(this).toggle(!q||(n+p+e).includes(q));
+    });
+}
+$('#bs-cust-search').on('input',filterCustomers);
+
+$('#bs-add-customer').on('click',()=>{$('#bs-cust-id').val('');['name','phone','email','birthday','address','notes'].forEach(f=>$('#bs-cf-'+f).val(''));$('#bs-cf-status').val('active');openModal('#bs-cust-modal');});
+$(document).on('click','.bs-edit-customer',function(){
+    get({action:'bs_get_customer',id:$(this).data('id')}).then(res=>{
+        if(!res.success)return;
+        const c=res.data;
+        $('#bs-cust-id').val(c.id);$('#bs-cf-name').val(c.name);$('#bs-cf-phone').val(c.phone);
+        $('#bs-cf-email').val(c.email);$('#bs-cf-birthday').val(c.birthday||'');
+        $('#bs-cf-address').val(c.address);$('#bs-cf-notes').val(c.notes);$('#bs-cf-status').val(c.status);
+        openModal('#bs-cust-modal');
+    });
+});
+$('#bs-save-customer').on('click',function(){
+    if(!$('#bs-cf-name').val().trim()){alert('Name required');return;}
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    post({action:'bs_save_customer',id:$('#bs-cust-id').val(),name:$('#bs-cf-name').val(),
+        phone:$('#bs-cf-phone').val(),email:$('#bs-cf-email').val(),birthday:$('#bs-cf-birthday').val(),
+        address:$('#bs-cf-address').val(),notes:$('#bs-cf-notes').val(),status:$('#bs-cf-status').val()
+    }).then(res=>{btn.prop('disabled',false).text('Save');if(res.success)location.reload();});
+});
+$(document).on('click','.bs-view-cust-history',function(){
+    const id=$(this).data('id'),name=$(this).data('name');
+    $('#bs-cust-history-modal .bs-modal-header h2').text('History — '+name);
+    $('#bs-cust-history-body').html('<em>Loading…</em>');
+    openModal('#bs-cust-history-modal');
+    // Load sales filtered by customer
+    $.get(ajax_url,{action:'bs_get_cust_history',id}).then(res=>{
+        if(!res||!res.success){$('#bs-cust-history-body').html('<em>No history.</em>');return;}
+        let html='<table class="bs-table bs-table-sm"><thead><tr><th>Ref</th><th>Date</th><th>Total</th><th>Payment</th></tr></thead><tbody>';
+        res.data.forEach(s=>html+=`<tr><td><code>${esc(s.sale_ref)}</code></td><td>${esc(s.created_at?.slice(0,10))}</td><td>${fmt(s.total)}</td><td>${esc(s.payment_method)}</td></tr>`);
+        html+='</tbody></table>';$('#bs-cust-history-body').html(html);
+    }).fail(()=>$('#bs-cust-history-body').html('<em>No history found.</em>'));
+});
+$(document).on('click','.bs-add-credit-btn',function(){
+    const id=$(this).data('id'),name=$(this).data('name');
+    const amount=prompt(`Add credit for ${name} (${currency}):`)
+    if(!amount||isNaN(amount))return;
+    const note=prompt('Reason:')||'';
+    post({action:'bs_add_credit',customer_id:id,amount,note}).then(res=>{if(res.success){alert('Credit added!');location.reload();}});
+});
+$(document).on('click','.bs-adjust-loyalty-btn',function(){
+    const id=$(this).data('id'),name=$(this).data('name');
+    const pts=prompt(`Adjust loyalty points for ${name} (use negative to deduct):`);
+    if(!pts||isNaN(pts))return;
+    const note=prompt('Reason:')||'Manual adjustment';
+    post({action:'bs_adjust_loyalty',customer_id:id,points:parseInt(pts),note}).then(res=>{if(res.success){alert('Points adjusted!');location.reload();}});
+});
+
+// ── Suppliers ─────────────────────────────────────────────────
+$('#bs-add-supplier').on('click',()=>{$('#bs-sup-id').val('');['name','contact','email','phone','address','notes'].forEach(f=>$('#bs-sf-'+f).val(''));openModal('#bs-sup-modal');});
+$(document).on('click','.bs-edit-supplier',function(){
+    get({action:'bs_get_supplier',id:$(this).data('id')}).then(res=>{
+        if(!res.success)return;const s=res.data;
+        $('#bs-sup-id').val(s.id);$('#bs-sf-name').val(s.name);$('#bs-sf-contact').val(s.contact_name);
+        $('#bs-sf-email').val(s.email);$('#bs-sf-phone').val(s.phone);$('#bs-sf-address').val(s.address);$('#bs-sf-notes').val(s.notes);
+        openModal('#bs-sup-modal');
+    });
+});
+$('#bs-save-supplier').on('click',function(){
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    post({action:'bs_save_supplier',id:$('#bs-sup-id').val(),name:$('#bs-sf-name').val(),contact_name:$('#bs-sf-contact').val(),
+        email:$('#bs-sf-email').val(),phone:$('#bs-sf-phone').val(),address:$('#bs-sf-address').val(),notes:$('#bs-sf-notes').val()
+    }).then(res=>{btn.prop('disabled',false).text('Save');if(res.success)location.reload();});
+});
+
+// ── Purchase Orders ───────────────────────────────────────────
+$('#bs-create-po').on('click',()=>{updatePOTotal();openModal('#bs-po-modal');});
+$('#bs-po-add-item').on('click',()=>{
+    const row=$('.bs-po-item:first').clone();
+    row.find('input').val('');row.find('.bs-po-qty').val(1);
+    $('#bs-po-items').append(row);
+});
+$(document).on('click','.bs-po-remove-item',function(){
+    if($('.bs-po-item').length>1)$(this).closest('.bs-po-item').remove();
+    updatePOTotal();
+});
+$(document).on('input','.bs-po-qty,.bs-po-cost',updatePOTotal);
+function updatePOTotal(){
+    let total=0;
+    $('.bs-po-item').each(function(){
+        const qty=parseFloat($(this).find('.bs-po-qty').val())||0;
+        const cost=parseFloat($(this).find('.bs-po-cost').val())||0;
+        total+=qty*cost;
+    });
+    $('#bs-po-total-display').text('Total: '+currency+total.toFixed(2));
+}
+$('#bs-save-po').on('click',function(){
+    const items=[];
+    $('.bs-po-item').each(function(){
+        const bid=$(this).find('.bs-po-book-id').val();
+        const qty=$(this).find('.bs-po-qty').val();
+        const cost=$(this).find('.bs-po-cost').val();
+        if(qty&&cost) items.push({book_id:bid||0,qty,cost});
+    });
+    if(!items.length){alert('Add at least one item');return;}
+    const btn=$(this).prop('disabled',true).text('Creating…');
+    post({action:'bs_create_po',supplier_id:$('#bs-po-supplier').val(),items:JSON.stringify(items),notes:$('#bs-po-notes').val()
+    }).then(res=>{btn.prop('disabled',false).text('Create PO');if(res.success){alert('PO created!');location.reload();}});
+});
+// Book search in PO form
+$(document).on('input','.bs-po-book-search',function(){
+    const el=$(this);const q=el.val().trim();
+    if(q.length<2)return;
+    get({action:'bs_search_books',q}).then(res=>{
+        if(!res.success)return;
+        // simple first-match fill
+        const b=res.data[0];if(!b)return;
+        el.val(b.title);
+        el.closest('.bs-po-item').find('.bs-po-book-id').val(b.id);
+        el.closest('.bs-po-item').find('.bs-po-cost').val(b.cost_price);
+    });
+});
+$(document).on('click','.bs-view-po,.bs-receive-po',function(){
+    const id=$(this).data('id'),ref=$(this).data('ref');
+    const isReceive=$(this).hasClass('bs-receive-po');
+    $('#bs-po-view-modal .bs-modal-header h2').text('PO — '+ref);
+    $('#bs-po-view-body').html('<em>Loading…</em>');
+    openModal('#bs-po-view-modal');
+    $('#bs-confirm-receive').toggle(isReceive).data('po-id',id);
+    get({action:'bs_get_po_items',id}).then(res=>{
+        let html='<table class="bs-table bs-table-sm"><thead><tr><th>Book</th><th>ISBN</th><th>Ordered</th>'+(isReceive?'<th>Received</th>':'')+'<th>Cost</th><th>Line Total</th></tr></thead><tbody>';
+        (res.data||[]).forEach(i=>html+=`<tr><td>${esc(i.title)}</td><td>${esc(i.isbn)}</td><td>${i.qty_ordered}</td>${isReceive?`<td><input type='number' class='bs-input po-recv-qty' data-item-id='${i.id}' value='${i.qty_ordered}' min='0' max='${i.qty_ordered}' style='width:70px'></td>`:''}<td>${fmt(i.unit_cost)}</td><td>${fmt(i.unit_cost*i.qty_ordered)}</td></tr>`);
+        html+='</tbody></table>';
+        $('#bs-po-view-body').html(html);
+    });
+});
+$('#bs-confirm-receive').on('click',function(){
+    const po_id=$(this).data('po-id');
+    const received={};
+    $('.po-recv-qty').each(function(){received[$(this).data('item-id')]=$(this).val();});
+    post({action:'bs_receive_po',po_id,received:JSON.stringify(received)}).then(res=>{if(res.success){alert('Stock updated!');location.reload();}});
+});
+
+// ── Promotions ────────────────────────────────────────────────
+$('#bs-add-promo').on('click',()=>{$('#bs-promo-id').val('');$('#bs-pf-name,#bs-pf-code,#bs-pf-value,#bs-pf-min').val('');$('#bs-pf-limit').val(0);$('#bs-pf-buy').val(2);$('#bs-pf-get').val(1);$('#bs-pf-start,#bs-pf-end').val('');$('#bs-pf-type').val('percent');$('#bs-pf-status').val('active');$('#bs-pf-manager').prop('checked',false);toggleBxGy();openModal('#bs-promo-modal');});
+$(document).on('click','.bs-edit-promo',function(){
+    get({action:'bs_get_promotion',id:$(this).data('id')}).then(res=>{
+        if(!res.success)return;const p=res.data;
+        $('#bs-promo-id').val(p.id);$('#bs-pf-name').val(p.name);$('#bs-pf-code').val(p.code);
+        $('#bs-pf-type').val(p.type);$('#bs-pf-value').val(p.value);$('#bs-pf-min').val(p.min_purchase);
+        $('#bs-pf-buy').val(p.buy_qty);$('#bs-pf-get').val(p.get_qty);$('#bs-pf-limit').val(p.usage_limit||0);
+        $('#bs-pf-start').val(p.start_date||'');$('#bs-pf-end').val(p.end_date||'');
+        $('#bs-pf-status').val(p.status);$('#bs-pf-manager').prop('checked',p.requires_manager==1);
+        toggleBxGy();openModal('#bs-promo-modal');
+    });
+});
+function toggleBxGy(){const t=$('#bs-pf-type').val();$('#bs-pf-bxgy-group,#bs-pf-bxgy-group2').toggle(t==='buy_x_get_y');}
+$('#bs-pf-type').on('change',toggleBxGy);
+$('#bs-save-promo').on('click',function(){
+    if(!$('#bs-pf-name').val().trim()){alert('Name required');return;}
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    post({action:'bs_save_promotion',id:$('#bs-promo-id').val(),name:$('#bs-pf-name').val(),code:$('#bs-pf-code').val(),
+        type:$('#bs-pf-type').val(),value:$('#bs-pf-value').val(),min_purchase:$('#bs-pf-min').val(),
+        buy_qty:$('#bs-pf-buy').val(),get_qty:$('#bs-pf-get').val(),usage_limit:$('#bs-pf-limit').val(),
+        start_date:$('#bs-pf-start').val(),end_date:$('#bs-pf-end').val(),status:$('#bs-pf-status').val(),
+        requires_manager:$('#bs-pf-manager').is(':checked')?1:0
+    }).then(res=>{btn.prop('disabled',false).text('Save Promotion');if(res.success)location.reload();});
+});
+$(document).on('click','.bs-delete-promo',function(){
+    if(!confirm('Deactivate this promotion?'))return;
+    post({action:'bs_delete_promotion',id:$(this).data('id')}).then(res=>{if(res.success)location.reload();});
+});
+
+// ── Reports: Charts ───────────────────────────────────────────
+// ── Reports Charts ────────────────────────────────────────────
+const PALETTE=['#c8860a','#2a7a3b','#1565c0','#8a5c00','#c0392b','#e67e22','#8e44ad','#16a085','#2c3e50','#7f8c8d','#d35400','#27ae60'];
+
+// Daily Revenue + Transactions (dual axis)
+const dailyEl=document.getElementById('bs-daily-chart');
+if(dailyEl){
+    const raw=JSON.parse(document.getElementById('bs-daily-data')?.textContent||'[]');
+    if(raw.length){
+        new Chart(dailyEl,{
+            type:'bar',
+            data:{
+                labels:raw.map(r=>r.day),
+                datasets:[
+                    {label:'Revenue',data:raw.map(r=>parseFloat(r.revenue)||0),
+                     backgroundColor:'rgba(200,134,10,.75)',borderColor:'#c8860a',borderWidth:1,borderRadius:4,yAxisID:'y'},
+                    {label:'Transactions',type:'line',data:raw.map(r=>parseInt(r.sales_count)||0),
+                     borderColor:'#2a7a3b',backgroundColor:'rgba(42,122,59,.1)',borderWidth:2,
+                     pointRadius:3,tension:.3,yAxisID:'y1'},
+                ]
+            },
+            options:{
+                responsive:true,
+                interaction:{mode:'index',intersect:false},
+                plugins:{legend:{position:'top'}},
+                scales:{
+                    y:{beginAtZero:true,position:'left',ticks:{callback:v=>currency+v.toLocaleString()}},
+                    y1:{beginAtZero:true,position:'right',grid:{drawOnChartArea:false}}
+                }
+            }
+        });
+    } else {
+        dailyEl.parentElement.innerHTML+='<p style="color:#999;text-align:center;margin-top:20px">No sales data for this period.</p>';
+        dailyEl.remove();
+    }
+}
+
+// Genre doughnut
+const genreEl=document.getElementById('bs-genre-chart');
+if(genreEl){
+    const raw=JSON.parse(document.getElementById('bs-genre-data')?.textContent||'[]');
+    if(raw.length){
+        new Chart(genreEl,{type:'doughnut',
+            data:{labels:raw.map(r=>r.genre||'Unknown'),datasets:[{data:raw.map(r=>parseFloat(r.revenue)||0),backgroundColor:PALETTE}]},
+            options:{responsive:true,plugins:{legend:{position:'right'},tooltip:{callbacks:{label:ctx=>ctx.label+': '+currency+parseFloat(ctx.raw).toLocaleString('en',{minimumFractionDigits:2})}}}}
+        });
+    }
+}
+
+// Hourly bar chart
+const hourlyEl=document.getElementById('bs-hourly-chart');
+if(hourlyEl){
+    const raw=JSON.parse(document.getElementById('bs-hourly-data')?.textContent||'[]');
+    const labels=raw.map(r=>{const h=parseInt(r.hr);return(h===0?'12am':h<12?h+'am':h===12?'12pm':(h-12)+'pm');});
+    new Chart(hourlyEl,{type:'bar',
+        data:{labels,datasets:[{label:'Sales',data:raw.map(r=>parseInt(r.sales_count)||0),backgroundColor:'rgba(200,134,10,.7)',borderRadius:3}]},
+        options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{stepSize:1}}}}
+    });
+}
+
+// Payment methods doughnut
+const payEl=document.getElementById('bs-pay-chart');
+if(payEl){
+    const raw=JSON.parse(document.getElementById('bs-pay-data')?.textContent||'[]');
+    if(raw.length){
+        new Chart(payEl,{type:'doughnut',
+            data:{labels:raw.map(r=>r.payment_method.charAt(0).toUpperCase()+r.payment_method.slice(1)),
+                  datasets:[{data:raw.map(r=>parseFloat(r.revenue)||0),backgroundColor:PALETTE}]},
+            options:{responsive:true,plugins:{legend:{position:'right'},tooltip:{callbacks:{label:ctx=>ctx.label+': '+currency+parseFloat(ctx.raw).toLocaleString('en',{minimumFractionDigits:2})}}}}
+        });
+    }
+}
+
+// ── Staff: PIN ─────────────────────────────────────────────────
+$(document).on('click','.bs-set-pin',function(){
+    $('#bs-pin-user-id').val($(this).data('id'));
+    $('#bs-pin-staff-name').text($(this).data('name'));
+    $('#bs-pin-input').val('');
+    openModal('#bs-pin-modal');
+});
+$('#bs-save-pin').on('click',function(){
+    const uid=$('#bs-pin-user-id').val();const pin=$('#bs-pin-input').val();
+    if(pin.length<4){alert('PIN must be at least 4 digits');return;}
+    post({action:'bs_set_pin',user_id:uid,pin}).then(res=>{if(res.success){closeModals();alert('PIN saved!');location.reload();}});
+});
+
+// ── Settings ──────────────────────────────────────────────────
+$('#bs-save-settings').on('click',function(){
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    // Use FormData so password fields and textareas are all included
+    const data={action:'bs_save_settings'};
+    // Collect every .bs-setting element regardless of type
+    $('.bs-setting').each(function(){
+        const name=$(this).attr('name');
+        if(!name) return;
+        const tag=$(this).prop('tagName').toLowerCase();
+        const type=$(this).attr('type')||'';
+        // Include all input types including password, text, number, email, url, select, textarea
+        data[name]=$(this).val();
+    });
+    $.ajax({url:ajax_url,method:'POST',data,timeout:15000})
+     .done(function(res){
+        btn.prop('disabled',false).text('💾 Save All Settings');
+        if(res&&res.success){
+            $('#bs-settings-msg').show();
+            setTimeout(()=>$('#bs-settings-msg').hide(),3000);
+        } else {
+            alert('Save failed: '+(res&&res.data?res.data:'Unknown error'));
+        }
+    }).fail(function(xhr){
+        btn.prop('disabled',false).text('💾 Save All Settings');
+        alert('Request failed ('+xhr.status+'). Please try again.');
+    });
+});
+});
+
+// ── Branches ──────────────────────────────────────────────────────────────────
+$(document).on('click','#bs-add-branch',function(){
+    $('#bs-branch-id').val('');
+    $('#bs-bf-name,#bs-bf-phone,#bs-bf-email,#bs-bf-manager').val('');
+    $('#bs-bf-address').val('');
+    $('#bs-bf-status').val('active');
+    openModal('#bs-branch-modal');
+});
+$(document).on('click','.bs-edit-branch',function(){
+    get({action:'bs_get_branch',id:$(this).data('id')}).then(function(res){
+        if(!res.success) return;
+        var b=res.data;
+        $('#bs-branch-id').val(b.id);
+        $('#bs-bf-name').val(b.name);$('#bs-bf-address').val(b.address);
+        $('#bs-bf-phone').val(b.phone);$('#bs-bf-email').val(b.email);
+        $('#bs-bf-manager').val(b.manager);$('#bs-bf-status').val(b.status);
+        openModal('#bs-branch-modal');
+    });
+});
+$(document).on('click','#bs-save-branch',function(){
+    if(!$('#bs-bf-name').val().trim()){alert('Branch name required');return;}
+    const btn=$(this).prop('disabled',true).text('Saving…');
+    post({action:'bs_save_branch',id:$('#bs-branch-id').val(),
+        name:$('#bs-bf-name').val(),address:$('#bs-bf-address').val(),
+        phone:$('#bs-bf-phone').val(),email:$('#bs-bf-email').val(),
+        manager:$('#bs-bf-manager').val(),status:$('#bs-bf-status').val()
+    }).then(function(res){
+        btn.prop('disabled',false).text('Save Branch');
+        if(res.success) location.reload(); else alert('Save failed.');
+    });
+});
+$(document).on('click','.bs-view-branch-stock',function(){
+    const id=$(this).data('id'),name=$(this).data('name');
+    $('#bs-branch-stock-modal .bs-modal-header h2').text('Stock — '+name);
+    $('#bs-branch-stock-body').html('<em>Loading…</em>');
+    openModal('#bs-branch-stock-modal');
+    get({action:'bs_get_branch_stock',id}).then(function(res){
+        if(!res.success){$('#bs-branch-stock-body').html('<em>Error</em>');return;}
+        var cur=currency;
+        var html='<table class="bs-table bs-table-sm"><thead><tr><th>Title</th><th>Author</th><th>ISBN</th><th>Stock</th><th>Price</th></tr></thead><tbody>';
+        (res.data||[]).forEach(function(b){
+            var cls=parseInt(b.qty)<=parseInt(b.low_stock_threshold)?'bs-low-stock':'';
+            html+='<tr><td>'+esc(b.title)+'</td><td>'+esc(b.author)+'</td><td>'+esc(b.isbn)+'</td><td class="'+cls+'">'+b.qty+'</td><td>'+cur+fmt(b.sell_price)+'</td></tr>';
+        });
+        if(!res.data.length) html+='<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">No stock recorded for this branch.</td></tr>';
+        html+='</tbody></table>';
+        $('#bs-branch-stock-body').html(html);
+    });
+});
+$(document).on('click','#bs-check-reorder',function(){
+    const btn=$(this).prop('disabled',true).text('Checking…');
+    post({action:'bs_check_reorder'}).then(function(res){
+        btn.prop('disabled',false).text('🔄 Check Reorder Points');
+        if(res.success) alert(res.data.message);
+    });
+});
+
+// ── Messaging ─────────────────────────────────────────────────────────────────
+var segmentIds=[];
+$(document).on('click','#bs-load-segment',function(){
+    const genre=$('#msg-genre').val(),days=$('#msg-days').val(),spend=$('#msg-min-spend').val();
+    $(this).prop('disabled',true).text('Loading…');
+    const btn=$(this);
+    get({action:'bs_get_customer_segment',genre,days,min_spend:spend}).then(function(res){
+        btn.prop('disabled',false).text('Load Recipients');
+        if(!res.success){alert('Failed to load');return;}
+        const customers=res.data||[];
+        segmentIds=customers.map(function(c){return c.id;});
+        $('#msg-segment-result').html('<strong>'+customers.length+' customers</strong> selected '+(customers.filter(function(c){return c.email;}).length+' with email, '+customers.filter(function(c){return c.phone;}).length+' with phone)'));
+        const listHtml=customers.slice(0,10).map(function(c){
+            return '<div style="padding:4px 0;border-bottom:1px solid #f0e8d8">'+esc(c.name)+' — '+esc(c.email||'no email')+'</div>';
+        }).join('')+(customers.length>10?'<div style="color:var(--muted);font-size:.75rem;margin-top:4px">…and '+(customers.length-10)+' more</div>':'');
+        $('#msg-recipient-list').html(listHtml);
+    });
+});
+$(document).on('click','#bs-send-msg',function(){
+    if(!segmentIds.length){alert('Load recipients first.');return;}
+    const channel=$('#msg-channel').val();
+    const subject=$('#msg-subject').val().trim();
+    const body=$('#msg-body').val().trim();
+    if(!body){alert('Message body required');return;}
+    if((channel==='email'||channel==='both')&&!subject){alert('Email subject required');return;}
+    const btn=$(this).prop('disabled',true).text('Sending…');
+
+    if(channel==='email'||channel==='both'){
+        post({action:'bs_send_bulk_email',customer_ids:JSON.stringify(segmentIds),subject,body}).then(function(res){
+            btn.prop('disabled',false).text('Send Message');
+            if(res.success) $('#msg-send-result').html('<span style="color:var(--green)">✓ Sent to '+res.data.sent+' customers ('+res.data.failed+' failed)</span>');
+            else $('#msg-send-result').html('<span style="color:var(--red)">Error: '+esc(res.data)+'</span>');
+        });
+    }
+    if(channel==='whatsapp'||channel==='both'){
+        post({action:'bs_get_whatsapp_links',customer_ids:JSON.stringify(segmentIds),message:body}).then(function(res){
+            btn.prop('disabled',false).text('Send Message');
+            if(!res.success) return;
+            const links=res.data||[];
+            const html=links.map(function(l){
+                return '<div style="padding:6px 0;border-bottom:1px solid #f0e8d8;display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:.83rem">'+esc(l.name)+' ('+esc(l.phone)+')</span><a href="'+esc(l.url)+'" target="_blank" class="bs-btn bs-btn-secondary" style="font-size:.75rem;padding:4px 10px">Open WhatsApp</a></div>';
+            }).join('');
+            $('#msg-wa-links-body').html(html);
+            $('#msg-wa-links').show();
+        });
+    }
+});
+$('#msg-channel').on('change',function(){
+    $('#msg-email-fields').toggle($(this).val()!=='whatsapp');
+});
+
+// ── Online Orders & API ────────────────────────────────────────────────────────
+$(document).on('click','#bs-gen-api-key',function(){
+    if(!confirm('Regenerate API key? The old key will stop working immediately.')) return;
+    post({action:'bs_generate_api_key'}).then(function(res){
+        if(res.success) $('#bs-api-key-display').val(res.data.key);
+    });
+});
+$(document).on('click','#bs-add-webhook',function(){
+    const url=$('#wh-url').val().trim();
+    const event=$('#wh-event').val();
+    const secret=$('#wh-secret').val();
+    if(!url){alert('URL required');return;}
+    post({action:'bs_add_webhook',url,event,secret}).then(function(res){
+        if(res.success){
+            $('#wh-list').append('<tr data-id="'+res.data.id+'"><td>'+esc(url)+'</td><td><code>'+esc(event)+'</code></td><td><span class="bs-badge bs-badge-active">active</span></td><td><button class="bs-btn-link bs-delete-webhook" data-id="'+res.data.id+'">Delete</button></td></tr>');
+            $('#wh-url,#wh-secret').val('');
+        }
+    });
+});
+$(document).on('click','.bs-delete-webhook',function(){
+    if(!confirm('Delete this webhook?')) return;
+    const id=$(this).data('id'),row=$(this).closest('tr');
+    post({action:'bs_delete_webhook',id}).then(function(res){if(res.success) row.remove();});
+});
+$(document).on('click','.bs-view-online-order',function(){
+    const ref=$(this).data('ref');
+    const items=$(this).data('items')||[];
+    $('#bs-oo-modal-title').text('Order — '+ref);
+    var cur=currency;
+    var html='<div style="padding:16px"><table class="bs-table bs-table-sm"><thead><tr><th>Book</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>';
+    (Array.isArray(items)?items:[]).forEach(function(i){
+        html+='<tr><td>'+esc(i.title||'')+'</td><td>'+i.qty+'</td><td>'+cur+fmt(i.price)+'</td><td>'+cur+fmt(i.price*i.qty)+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+    $('#bs-oo-modal-body').html(html);
+    openModal('#bs-online-order-modal');
+});
+
+function fmt(n){return parseFloat(n||0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
+function esc(s){return $('<div>').text(s||'').html();}
+
+// ── Settings page extras ───────────────────────────────────────────────────────
+$(document).on('click','#bs-send-eod-now',function(){
+    var btn=$(this).prop('disabled',true).text('Sending…');
+    post({action:'bs_send_eod_now'}).then(function(res){
+        btn.prop('disabled',false).text('📧 Send EOD Report Now');
+        alert(res.success?res.data.message:'Failed: '+(res.data||'Unknown error'));
+    });
+});
+$(document).on('click','#bs-run-expiry',function(){
+    if(!confirm('Run loyalty points expiry now? This will expire points for inactive customers.')) return;
+    var btn=$(this).prop('disabled',true).text('Running…');
+    post({action:'bs_run_loyalty_expiry'}).then(function(res){
+        btn.prop('disabled',false).text('⏰ Run Points Expiry Now');
+        alert(res.success?res.data.message:'Error: '+(res.data||'Unknown'));
+    });
+});
+$(document).on('click','#bs-sync-sheets-now',function(){
+    var btn=$(this).prop('disabled',true).text('Syncing…');
+    post({action:'bs_sync_sheets',date:new Date().toISOString().split('T')[0]}).then(function(res){
+        btn.prop('disabled',false).text('🔄 Sync Today to Sheets');
+        alert(res.success?'Synced '+res.data.rows+' rows to Google Sheets':'Error: '+(res.data||'Unknown'));
+    });
+});
+
+// ── Refunds (on sales page) ────────────────────────────────────────────────────
+$(document).on('click','.bs-refund-sale',function(){
+    var saleId=$(this).data('id');
+    var ref=$(this).data('ref');
+    // Get sale items first
+    get({action:'bs_get_sale_items',id:saleId}).then(function(res){
+        if(!res.success) return alert('Could not load sale items');
+        var items=res.data;
+        var html='<p style="margin-bottom:12px;color:var(--muted);font-size:.85rem">Select items and quantities to refund:</p>';
+        html+='<table class="bs-table bs-table-sm"><thead><tr><th>Book</th><th>Sold</th><th>Refund Qty</th></tr></thead><tbody>';
+        items.forEach(function(i){
+            html+='<tr><td>'+esc(i.title)+'</td><td>'+i.qty+'</td><td><input type="number" class="bs-input refund-qty" data-book-id="'+i.book_id+'" min="0" max="'+i.qty+'" value="0" style="width:70px"></td></tr>';
+        });
+        html+='</tbody></table>';
+        html+='<div style="margin-top:12px"><label style="font-size:.8rem;font-weight:600">Reason *</label><input type="text" id="refund-reason" class="bs-input" placeholder="Customer return, defective, etc." style="margin-top:4px"></div>';
+        html+='<label style="margin-top:10px;display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer"><input type="checkbox" id="refund-restock" checked> Restock returned books</label>';
+
+        // Show in modal
+        $('#bs-sale-items-modal .bs-modal-header h2').text('Refund — '+ref);
+        $('#bs-sale-items-body').html(html);
+        // Swap footer button
+        $('#bs-sale-items-modal .bs-modal-footer').html(
+            '<button class="bs-btn bs-btn-secondary bs-modal-close">Cancel</button>'+
+            '<button class="bs-btn bs-btn-primary" id="bs-confirm-refund" data-sale-id="'+saleId+'">Process Refund</button>'
+        );
+        openModal('#bs-sale-items-modal');
+    });
+});
+$(document).on('click','#bs-confirm-refund',function(){
+    var saleId=$(this).data('sale-id');
+    var reason=$('#refund-reason').val().trim();
+    if(!reason){alert('Please provide a reason for the refund');return;}
+    var items={};
+    $('.refund-qty').each(function(){
+        var qty=parseInt($(this).val())||0;
+        if(qty>0) items[$(this).data('book-id')]=qty;
+    });
+    if(!Object.keys(items).length){alert('Select at least one item to refund');return;}
+    var restock=$('#refund-restock').is(':checked')?1:0;
+    var btn=$(this).prop('disabled',true).text('Processing…');
+    post({action:'bs_create_refund',sale_id:saleId,items:JSON.stringify(items),reason:reason,restock:restock}).then(function(res){
+        btn.prop('disabled',false).text('Process Refund');
+        if(res.success){
+            alert('Refund '+res.data.ref+' processed — '+currency+parseFloat(res.data.amount).toFixed(2));
+            closeModals();location.reload();
+        } else {
+            alert('Refund failed: '+(res.data||'Unknown error'));
+        }
+    });
+});
+
+// ── Backup Restore ─────────────────────────────────────────────────────────────
+$(document).on('click', '#bs-restore-btn', function() {
+    const file = $('#bs-restore-file')[0].files[0];
+    if (!file) { alert('Please select a .sql backup file first.'); return; }
+    if (!confirm('⚠️ WARNING: This will overwrite your existing bookshop data with the backup.\n\nAre you sure you want to continue?')) return;
+
+    const fd  = new FormData();
+    fd.append('action',      'bs_restore_backup');
+    fd.append('nonce',       nonce);
+    fd.append('backup_file', file);
+
+    const btn = $(this).prop('disabled', true).text('Restoring…');
+    const res = $('#bs-restore-result').show().html('<span style="color:var(--muted)">⏳ Uploading and restoring, please wait…</span>');
+
+    $.ajax({
+        url:         ajax_url,
+        type:        'POST',
+        data:        fd,
+        processData: false,
+        contentType: false,
+        timeout:     120000, // 2 min for large files
+    }).done(function(r) {
+        btn.prop('disabled', false).text('🔄 Restore Backup');
+        if (r && r.success) {
+            res.html('<span style="color:var(--green)">✅ ' + esc(r.data.message) + '</span>');
+            if (r.data.error_details && r.data.error_details.length) {
+                res.append('<details style="margin-top:8px"><summary style="cursor:pointer;font-size:.78rem">Show errors</summary><pre style="font-size:.72rem;background:#f5f5f5;padding:8px;border-radius:6px;overflow:auto">' + r.data.error_details.map(esc).join('\n') + '</pre></details>');
+            }
+        } else {
+            res.html('<span style="color:var(--red)">❌ Error: ' + esc((r && r.data) ? r.data : 'Unknown error') + '</span>');
+        }
+    }).fail(function(xhr) {
+        btn.prop('disabled', false).text('🔄 Restore Backup');
+        res.html('<span style="color:var(--red)">❌ Upload failed (' + xhr.status + '). Check file size and try again.</span>');
+    });
+});
+
+// ── Stock Take ────────────────────────────────────────────────────────────────
+$(document).on('click','#bs-new-stocktake',function(){
+    var branches=$('.bs-view-branch-stock').map(function(){
+        return '<option value="'+$(this).data('id')+'">'+esc($(this).data('name'))+'</option>';
+    }).get().join('');
+    if(!branches){
+        alert('No branches found. Please add a branch first.');
+        return;
+    }
+    var html='<div class="bs-form-group" style="margin-bottom:14px">'
+        +'<label>Select Branch</label>'
+        +'<select id="st-branch-id" class="bs-input"><option value="">-- Select Branch --</option>'+branches+'</select>'
+        +'</div>'
+        +'<p style="font-size:.83rem;color:var(--muted)">After creating the stock take, use "Enter Counts" to record your physical count for each book.</p>';
+    // Build and show modal
+    $('#bs-branch-stock-modal .bs-modal-header h2').text('New Stock Take');
+    $('#bs-branch-stock-body').html(html);
+    $('#bs-branch-stock-modal .bs-modal-footer').remove();
+    var footer=$('<div class="bs-modal-footer">'
+        +'<button class="bs-btn bs-btn-secondary bs-modal-close">Cancel</button>'
+        +'<button class="bs-btn bs-btn-primary" id="bs-create-stocktake-btn">Create Stock Take</button>'
+        +'</div>');
+    $('#bs-branch-stock-modal .bs-modal-box').append(footer);
+    openModal('#bs-branch-stock-modal');
+});
+
+$(document).on('click','#bs-create-stocktake-btn',function(){
+    var bid=$('#st-branch-id').val();
+    if(!bid){alert('Please select a branch');return;}
+    var btn=$(this).prop('disabled',true).text('Creating...');
+    post({action:'bs_create_stocktake',branch_id:bid}).then(function(res){
+        btn.prop('disabled',false).text('Create Stock Take');
+        if(res.success){
+            alert('Stock take created! Use "Enter Counts" to record your physical count.');
+            closeModals();
+            location.reload();
+        } else {
+            alert('Error: '+(res.data||'Unknown error'));
+        }
+    });
+});
+
+// Enter counts for an in-progress stock take
+$(document).on('click','.bs-do-stocktake',function(){
+    var takeId=$(this).data('id');
+    // Load branch stock to allow entering counts
+    $('#bs-branch-stock-modal .bs-modal-header h2').text('Enter Stock Counts');
+    $('#bs-branch-stock-body').html('<p style="color:var(--muted);padding:20px">Loading inventory...</p>');
+    openModal('#bs-branch-stock-modal');
+    // Get all books to count
+    get({action:'bs_get_all_books_for_count'}).then(function(res){
+        if(!res.success){$('#bs-branch-stock-body').html('<em>Error loading books</em>');return;}
+        var cur=currency;
+        var html='<div style="max-height:420px;overflow-y:auto">'
+            +'<table class="bs-table bs-table-sm">'
+            +'<thead><tr><th>Title</th><th>Author</th><th>Expected</th><th>Counted Qty</th></tr></thead><tbody>';
+        (res.data||[]).forEach(function(b){
+            html+='<tr>'
+                +'<td>'+esc(b.title)+'</td>'
+                +'<td style="color:var(--muted)">'+esc(b.author)+'</td>'
+                +'<td>'+parseInt(b.stock_qty)+'</td>'
+                +'<td><input type="number" class="bs-input st-count-input" data-book-id="'+b.id+'"'
+                +' value="'+parseInt(b.stock_qty)+'" min="0" style="width:80px;padding:4px 6px"></td>'
+                +'</tr>';
+        });
+        html+='</tbody></table></div>';
+        $('#bs-branch-stock-body').html(html);
+        // Add submit footer
+        $('#bs-branch-stock-modal .bs-modal-footer').remove();
+        var footer=$('<div class="bs-modal-footer">'
+            +'<button class="bs-btn bs-btn-secondary bs-modal-close">Cancel</button>'
+            +'<button class="bs-btn bs-btn-primary" id="bs-submit-stocktake" data-take-id="'+takeId+'">Submit Counts</button>'
+            +'</div>');
+        $('#bs-branch-stock-modal .bs-modal-box').append(footer);
+    });
+});
+
+$(document).on('click','#bs-submit-stocktake',function(){
+    var takeId=$(this).data('take-id');
+    var counts={};
+    $('.st-count-input').each(function(){
+        counts[$(this).data('book-id')]=$(this).val();
+    });
+    var btn=$(this).prop('disabled',true).text('Submitting...');
+    post({action:'bs_submit_stocktake',take_id:takeId,counts:JSON.stringify(counts)}).then(function(res){
+        btn.prop('disabled',false).text('Submit Counts');
+        if(res.success){
+            var variances=res.data||[];
+            var msg='Stock take complete!';
+            if(variances.length) msg+=' '+variances.length+' variance(s) found and adjusted.';
+            alert(msg);
+            closeModals();
+            location.reload();
+        } else {
+            alert('Error: '+(res.data||'Unknown error'));
+        }
+    });
+});
