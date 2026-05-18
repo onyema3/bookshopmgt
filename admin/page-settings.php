@@ -284,6 +284,28 @@ function bs_page_settings(){
             <div class="bs-form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
                 <button class="bs-btn bs-btn-secondary" id="bs-run-expiry" type="button">⏰ Run Points Expiry Now</button>
             </div>
+            <?php if ( current_user_can('manage_options') ):
+                $digest_last_sent  = get_option('bookshop_last_drift_digest_sent', '');
+                $digest_last_count = intval(get_option('bookshop_last_drift_digest_count', 0));
+            ?>
+            <div class="bs-form-group">
+                <label>Drift Digest Email (weekly)</label>
+                <input type="email" name="bookshop_drift_digest_email" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_drift_digest_email',get_option('admin_email')))?>"
+                    placeholder="leave blank to disable">
+                <small style="color:var(--muted);font-size:.75rem">
+                    Weekly summary of books whose global stock disagrees with their per-branch sum.
+                    Suppressed when there's no drift. Clear the field to disable.
+                    <?php if($digest_last_sent): ?>
+                    <br>Last sent: <strong><?=esc_html($digest_last_sent)?></strong>
+                    (<?=$digest_last_count?> book<?=$digest_last_count===1?'':'s'?>)
+                    <?php endif; ?>
+                </small>
+            </div>
+            <div class="bs-form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
+                <button class="bs-btn bs-btn-secondary" id="bs-send-drift-digest-now" type="button">📧 Send Drift Digest Now</button>
+            </div>
+            <?php endif; ?>
             <div class="bs-form-group bs-span2">
                 <label>POS IP Whitelist (one IP per line, CIDR supported, empty = allow all)</label>
                 <textarea name="bookshop_ip_whitelist" class="bs-input bs-setting" rows="3"

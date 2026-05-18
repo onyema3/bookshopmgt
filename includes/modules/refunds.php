@@ -85,7 +85,13 @@ function bs_create_refund($sale_id,$items_to_refund,$reason='',$restock=true){
             // Restore at the same branch the original sale was made from.
             // Pre-migration sales have a NULL branch_id and are skipped.
             if ( !empty($sale->branch_id) ) {
-                bs_adjust_branch_stock( intval($sale->branch_id), intval($ri['book_id']), intval($ri['qty']) );
+                bs_adjust_branch_stock( intval($sale->branch_id), intval($ri['book_id']), intval($ri['qty']),
+                    "refund $ref of sale {$sale->sale_ref}" );
+            } else {
+                // Pre-v4 sale: only a global counter to restock. Emit a
+                // book-scoped audit row anyway so the activity panel sees it.
+                bs_audit( 'global_stock_refunded', 'book', intval($ri['book_id']),
+                    "Global stock_qty: +".intval($ri['qty'])." (refund $ref of sale {$sale->sale_ref}, no branch)" );
             }
         }
     }

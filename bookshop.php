@@ -74,6 +74,7 @@ require_once BOOKSHOP_DIR . 'includes/modules/book-conditions.php';
 require_once BOOKSHOP_DIR . 'includes/modules/pwa.php';
 require_once BOOKSHOP_DIR . 'includes/modules/pdf-export.php';
 require_once BOOKSHOP_DIR . 'includes/modules/bundles.php';
+require_once BOOKSHOP_DIR . 'includes/modules/drift-digest.php';
 
 // Portal
 require_once BOOKSHOP_DIR . 'includes/ajax-portal.php';

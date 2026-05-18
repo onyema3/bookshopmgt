@@ -145,22 +145,45 @@ function bs_get_stock_drift($book_id = 0, $limit = 500) {
 }
 
 /**
- * Set bookshop_books.stock_qty to the sum of the book's per-branch counts.
+ * Reconcile a book's stock so the global stock_qty and per-branch sum agree.
  *
- * Returns ['ok'=>true,'old'=>N,'new'=>M,'delta'=>diff] on success, or
- * ['error'=>'…'] on failure. Audits with both old and new value so the
- * change is reversible by reading the audit log.
+ * Two directions, picked by the caller:
+ *
+ *   - 'branches_to_global' (default): set bookshop_books.stock_qty to the
+ *     SUM of active branch_stock rows. This is the right call when the
+ *     drift comes from pre-v4 sales (which only decremented the global
+ *     counter) — branches are authoritative, global is wrong.
+ *
+ *   - 'global_to_branches': distribute the global stock_qty proportionally
+ *     across the active branches that already have a row, leaving the
+ *     global counter unchanged. Use this when drift comes from a missing
+ *     seed: the global figure represents real stock that's physically at
+ *     one of the branches, and we want to push it down without losing
+ *     count. If no branch has a row yet, we abort — picking one
+ *     arbitrarily would cause exactly the kind of silent move this
+ *     feature is designed to prevent.
+ *
+ * Returns ['ok'=>true, 'old'=>..., 'new'=>..., 'delta'=>..., 'direction'=>...]
+ * on success, ['ok'=>true, 'no_change'=>true, ...] when nothing needed to
+ * happen, or ['error'=>'…'] on failure.
  */
-function bs_reconcile_book_stock($book_id) {
+function bs_reconcile_book_stock($book_id, $direction = 'branches_to_global') {
     global $wpdb;
     $book_id = intval($book_id);
     if (!$book_id) return ['error' => 'Missing book_id'];
     $book = bs_get_book($book_id);
     if (!$book) return ['error' => 'Book not found'];
+    if (!in_array($direction, ['branches_to_global','global_to_branches'], true)) {
+        return ['error' => 'Invalid direction'];
+    }
 
-    // Sum is taken across active branches only — drift coming from an
-    // inactive (closed) location shouldn't be silently rolled into the
-    // global counter.
+    if ($direction === 'global_to_branches') {
+        return bs_reconcile_global_to_branches($book);
+    }
+
+    // ── branches_to_global ────────────────────────────────────────────────
+    // Sum across active branches only — drift coming from an inactive
+    // (closed) location shouldn't be silently rolled into the global counter.
     $sum = intval($wpdb->get_var($wpdb->prepare(
         "SELECT COALESCE(SUM(bst.qty), 0)
          FROM {$wpdb->prefix}bookshop_branch_stock bst
@@ -171,7 +194,10 @@ function bs_reconcile_book_stock($book_id) {
     )));
     $old = intval($book->stock_qty);
     if ($old === $sum) {
-        return ['ok' => true, 'old' => $old, 'new' => $sum, 'delta' => 0, 'no_change' => true];
+        return [
+            'ok'=>true,'old'=>$old,'new'=>$sum,'delta'=>0,
+            'no_change'=>true,'direction'=>$direction,
+        ];
     }
     $wpdb->update(
         "{$wpdb->prefix}bookshop_books",
@@ -182,20 +208,183 @@ function bs_reconcile_book_stock($book_id) {
         'stock_reconciled', 'book', $book_id,
         "{$book->title}: global stock_qty $old → $sum (sum across active branches)"
     );
-    return ['ok' => true, 'old' => $old, 'new' => $sum, 'delta' => $sum - $old];
+    return ['ok'=>true,'old'=>$old,'new'=>$sum,'delta'=>$sum-$old,'direction'=>$direction];
+}
+
+/**
+ * Push the global stock_qty down to the active branches in proportion to
+ * their existing counts. Helper for bs_reconcile_book_stock; not meant to
+ * be called directly — go through bs_reconcile_book_stock so the policy
+ * checks above are applied uniformly.
+ *
+ * Distribution rules:
+ *   - Each branch's new qty = floor(global * branch_share / sum_of_shares).
+ *   - When branch_sum == 0 (every branch has a row but they're all empty),
+ *     fall back to an even split.
+ *   - Rounding remainder is handed out one unit at a time to the branches
+ *     with the highest existing share, then alphabetically by name as a
+ *     tiebreaker — so the same input always produces the same output.
+ *   - If no branch has a row yet, return an error. Picking one arbitrarily
+ *     would silently move physical stock to whatever branch sorted first,
+ *     which is exactly the failure mode this feature is supposed to fix.
+ */
+function bs_reconcile_global_to_branches($book) {
+    global $wpdb;
+    $book_id = intval($book->id);
+    $global  = intval($book->stock_qty);
+
+    $branches = $wpdb->get_results($wpdb->prepare(
+        "SELECT br.id, br.name, COALESCE(bst.qty, 0) AS qty
+         FROM {$wpdb->prefix}bookshop_branches br
+         LEFT JOIN {$wpdb->prefix}bookshop_branch_stock bst
+                ON bst.branch_id = br.id AND bst.book_id = %d
+         WHERE br.status = 'active'
+         ORDER BY br.name ASC",
+        $book_id
+    ));
+    if (empty($branches)) {
+        return ['error' => 'No active branches'];
+    }
+    // Determine which active branches actually have a branch_stock row for
+    // this book. We won't invent rows here — for global→branches, missing
+    // seed rows are exactly the failure mode this feature is supposed to
+    // surface, so silently creating them would defeat the purpose.
+    $with_row = [];
+    $ids = array_map(function($b){ return intval($b->id); }, $branches);
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+        $params = array_merge([$book_id], $ids);
+        $rows = $wpdb->get_col($wpdb->prepare(
+            "SELECT branch_id FROM {$wpdb->prefix}bookshop_branch_stock
+             WHERE book_id=%d AND branch_id IN ($placeholders)",
+            $params
+        ));
+        $seeded = array_flip(array_map('intval', $rows));
+        foreach ($branches as $b) {
+            if (isset($seeded[intval($b->id)])) $with_row[] = $b;
+        }
+    }
+    if (empty($with_row)) {
+        return ['error' => 'No branch has a row for this book yet — re-seed branches first, then reconcile.'];
+    }
+
+    $current_sum = 0;
+    foreach ($with_row as $b) $current_sum += intval($b->qty);
+
+    // Compute the target per-branch quantities. floor() on the proportional
+    // share, then hand out the remainder so the totals match exactly.
+    $n = count($with_row);
+    $target = [];
+    if ($current_sum > 0) {
+        $assigned = 0;
+        // Pair each branch with its raw share so we can break ties on share,
+        // then on name (already sorted ASC), deterministically.
+        $shares = [];
+        foreach ($with_row as $idx => $b) {
+            $share = $global * intval($b->qty) / $current_sum;
+            $base  = (int) floor($share);
+            $frac  = $share - $base;
+            $target[$idx] = $base;
+            $shares[$idx] = $frac;
+            $assigned += $base;
+        }
+        $remainder = $global - $assigned;
+        if ($remainder > 0) {
+            // Largest fractional remainder wins; ties broken by current qty
+            // descending, then by branch name ascending (already the array
+            // order). uasort preserves keys so $target[$idx] still aligns.
+            $order = array_keys($shares);
+            usort($order, function($a, $b) use ($shares, $with_row) {
+                if ($shares[$a] !== $shares[$b]) return $shares[$b] <=> $shares[$a];
+                $qa = intval($with_row[$a]->qty);
+                $qb = intval($with_row[$b]->qty);
+                if ($qa !== $qb) return $qb <=> $qa;
+                return strcasecmp($with_row[$a]->name, $with_row[$b]->name);
+            });
+            foreach ($order as $idx) {
+                if ($remainder <= 0) break;
+                $target[$idx]++;
+                $remainder--;
+            }
+        }
+    } else {
+        // Every seeded branch is empty — even split. Remainder goes to the
+        // alphabetically-first branches so ties resolve deterministically.
+        $base = intdiv($global, $n);
+        $rem  = $global - ($base * $n);
+        foreach ($with_row as $idx => $b) {
+            $target[$idx] = $base + ($idx < $rem ? 1 : 0);
+        }
+    }
+
+    // Did anything actually change? If the proposed target matches what's
+    // there now, skip the writes (and the audit row).
+    $any_change = false;
+    foreach ($with_row as $idx => $b) {
+        if ($target[$idx] !== intval($b->qty)) { $any_change = true; break; }
+    }
+    if (!$any_change) {
+        return [
+            'ok'=>true,'old'=>$current_sum,'new'=>$current_sum,'delta'=>0,
+            'no_change'=>true,'direction'=>'global_to_branches',
+        ];
+    }
+
+    // Apply the writes inside a transaction so a mid-loop failure can't
+    // leave half the branches updated. Each individual UPDATE clamps at
+    // zero defensively — target should always be >= 0 by construction.
+    $wpdb->query('START TRANSACTION');
+    foreach ($with_row as $idx => $b) {
+        $new_qty = max(0, intval($target[$idx]));
+        if ($new_qty === intval($b->qty)) continue;
+        $wpdb->update(
+            "{$wpdb->prefix}bookshop_branch_stock",
+            ['qty' => $new_qty],
+            ['branch_id' => intval($b->id), 'book_id' => $book_id]
+        );
+    }
+    $wpdb->query('COMMIT');
+
+    // Build a compact human-readable diff for the audit log so the change
+    // is reversible by reading a single row.
+    $parts = [];
+    foreach ($with_row as $idx => $b) {
+        $parts[] = $b->name.': '.intval($b->qty).'→'.intval($target[$idx]);
+    }
+    bs_audit(
+        'stock_reconciled', 'book', $book_id,
+        "{$book->title}: distributed global=$global across branches (".implode(', ', $parts).")"
+    );
+
+    return [
+        'ok'        => true,
+        'old'       => $current_sum,
+        'new'       => $global,
+        'delta'     => $global - $current_sum,
+        'direction' => 'global_to_branches',
+    ];
 }
 
 /**
  * Reconcile every drifted book in one shot. Returns a summary with per-book
  * results so the UI can show what changed. Stops at $max books to keep the
  * response bounded — the usual case is a handful of pre-v4 sales, not thousands.
+ *
+ * Direction is forwarded to bs_reconcile_book_stock(). For 'global_to_branches'
+ * we skip rather than abort if a particular book has no seeded branches,
+ * because the bulk action shouldn't fail wholesale on one bad row — the
+ * skipped books stay in the drift report and can be re-seeded individually.
  */
-function bs_reconcile_all_drift($max = 500) {
-    $drift = bs_get_stock_drift(0, $max);
+function bs_reconcile_all_drift($max = 500, $direction = 'branches_to_global') {
+    if (!in_array($direction, ['branches_to_global','global_to_branches'], true)) {
+        $direction = 'branches_to_global';
+    }
+    $drift   = bs_get_stock_drift(0, $max);
     $results = [];
+    $skipped = [];
     $changed = 0;
     foreach ($drift as $row) {
-        $r = bs_reconcile_book_stock($row->id);
+        $r = bs_reconcile_book_stock($row->id, $direction);
         if (!empty($r['ok']) && empty($r['no_change'])) {
             $changed++;
             $results[] = [
@@ -205,10 +394,19 @@ function bs_reconcile_all_drift($max = 500) {
                 'new'     => $r['new'],
                 'delta'   => $r['delta'],
             ];
+        } elseif (!empty($r['error'])) {
+            $skipped[] = ['book_id'=>intval($row->id),'title'=>$row->title,'reason'=>$r['error']];
         }
     }
-    bs_audit('stock_reconciled_bulk', 'system', 0, "Reconciled $changed books");
-    return ['changed' => $changed, 'results' => $results];
+    bs_audit('stock_reconciled_bulk', 'system', 0,
+        "Reconciled $changed books (direction=$direction"
+        .(count($skipped) ? ', '.count($skipped).' skipped' : '').')');
+    return [
+        'changed'   => $changed,
+        'results'   => $results,
+        'skipped'   => $skipped,
+        'direction' => $direction,
+    ];
 }
 
 /**
@@ -377,12 +575,22 @@ function bs_set_branch_stock($branch_id,$book_id,$qty){
     $exists=$wpdb->get_var($wpdb->prepare(
         "SELECT id FROM {$wpdb->prefix}bookshop_branch_stock WHERE branch_id=%d AND book_id=%d",
         $branch_id,$book_id));
+    $before = $exists
+        ? intval($wpdb->get_var($wpdb->prepare(
+            "SELECT qty FROM {$wpdb->prefix}bookshop_branch_stock WHERE branch_id=%d AND book_id=%d",
+            $branch_id,$book_id)))
+        : 0;
     if($exists){
         $wpdb->update("{$wpdb->prefix}bookshop_branch_stock",['qty'=>max(0,intval($qty))],['branch_id'=>$branch_id,'book_id'=>$book_id]);
     } else {
         $wpdb->insert("{$wpdb->prefix}bookshop_branch_stock",['branch_id'=>$branch_id,'book_id'=>$book_id,'qty'=>max(0,intval($qty))]);
     }
-    bs_audit('branch_stock_set','branch_stock',$book_id,"Branch $branch_id: book $book_id qty=".intval($qty));
+    // object_type='book' so the per-book activity panel on the breakdown
+    // modal picks this up. (Earlier the type was 'branch_stock' with
+    // object_id=$book_id, which was a confusing combo and made the panel
+    // need a special case to find these rows.)
+    bs_audit('branch_stock_set','book',$book_id,
+        "Branch $branch_id: $before → ".max(0,intval($qty)).' (manual set or stock take)');
 }
 
 /**
@@ -396,8 +604,14 @@ function bs_set_branch_stock($branch_id,$book_id,$qty){
  * Returns true on success, false if the inputs are invalid. Silently no-ops
  * when $branch_id is 0 so callers can pass through historical sales whose
  * branch_id is NULL without special-casing.
+ *
+ * The optional $context string is appended to the audit row so a reader of
+ * the per-book activity panel can see *why* a delta happened ("void of sale
+ * BS-123ABC", "refund RF-XYZ", etc.) rather than a bare number. Pass an
+ * empty string when no useful context is available — the audit row will
+ * still be written so the change is traceable.
  */
-function bs_adjust_branch_stock($branch_id,$book_id,$delta){
+function bs_adjust_branch_stock($branch_id,$book_id,$delta,$context=''){
     global $wpdb;
     $branch_id=intval($branch_id); $book_id=intval($book_id); $delta=intval($delta);
     if(!$branch_id||!$book_id||$delta===0) return false;
@@ -405,11 +619,25 @@ function bs_adjust_branch_stock($branch_id,$book_id,$delta){
     $wpdb->query($wpdb->prepare(
         "INSERT IGNORE INTO {$wpdb->prefix}bookshop_branch_stock (branch_id,book_id,qty) VALUES (%d,%d,0)",
         $branch_id,$book_id));
+    // Read-back so the audit row can record the actual before/after rather
+    // than just the requested delta — the GREATEST(0,…) clamp can mean a
+    // -10 delta only moves stock by -3 if the row was already at 3.
+    $before = intval($wpdb->get_var($wpdb->prepare(
+        "SELECT qty FROM {$wpdb->prefix}bookshop_branch_stock WHERE branch_id=%d AND book_id=%d",
+        $branch_id,$book_id)));
     $wpdb->query($wpdb->prepare(
         "UPDATE {$wpdb->prefix}bookshop_branch_stock
             SET qty = GREATEST(0, qty + %d)
           WHERE branch_id=%d AND book_id=%d",
         $delta,$branch_id,$book_id));
+    $after = intval($wpdb->get_var($wpdb->prepare(
+        "SELECT qty FROM {$wpdb->prefix}bookshop_branch_stock WHERE branch_id=%d AND book_id=%d",
+        $branch_id,$book_id)));
+    if($before !== $after){
+        $detail = "Branch $branch_id: $before → $after (Δ".($after-$before>=0?'+':'').($after-$before).')';
+        if($context !== '') $detail .= " — $context";
+        bs_audit('branch_stock_adjusted','book',$book_id,$detail);
+    }
     return true;
 }
 function bs_transfer_stock($from_branch,$to_branch,$book_id,$qty){
