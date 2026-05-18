@@ -258,18 +258,29 @@ $(document).on('click','.bs-drift-reconcile',function(){
     });
 });
 $(document).on('click','#bs-reconcile-all-drift',function(){
-    if(!confirm('Set global stock_qty to the per-branch sum for every drifted book? This is logged to the audit trail.')) return;
+    // Direction is read at click time so changing the dropdown after the
+    // table renders takes effect immediately. Default mirrors the per-row
+    // button: branches_to_global, the "branches are authoritative" case.
+    var direction = $('#bs-reconcile-all-direction').val() || 'branches_to_global';
+    var prompt    = direction === 'global_to_branches'
+        ? 'Distribute the global stock_qty across each drifted book\'s branches (proportional to current counts)? Books with no seeded branch are skipped, not failed. The change is logged to the audit trail.'
+        : 'Set global stock_qty to the per-branch sum for every drifted book? This is logged to the audit trail.';
+    if(!confirm(prompt)) return;
     var btn = $(this).prop('disabled',true).text('Reconciling…');
-    post({action:'bs_reconcile_all_drift'}).then(function(res){
+    post({action:'bs_reconcile_all_drift', direction: direction}).then(function(res){
         btn.prop('disabled',false).text('🔧 Reconcile all');
         if(!res.success){
             alert('Reconcile-all failed: '+(res.data||'Unknown error'));
             return;
         }
         var changed = parseInt(res.data.changed||0);
+        var skipped = (res.data.skipped||[]).length;
         // Easier to reload than to surgically remove every row — the user is
         // confirming a bulk action, so the tab refreshing is expected.
-        alert('Reconciled '+changed+' book'+(changed===1?'':'s')+'. Reloading the report.');
+        var msg = 'Reconciled '+changed+' book'+(changed===1?'':'s')+'.';
+        if(skipped) msg += ' '+skipped+' skipped (no seeded branch — re-seed first).';
+        msg += ' Reloading the report.';
+        alert(msg);
         location.reload();
     });
 });
