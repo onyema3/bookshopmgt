@@ -174,25 +174,9 @@ body{font-family:var(--fb);background:var(--paper);color:var(--ink);height:100vh
 .pin-alt{color:#aaa;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:6px}
 
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#ccc;border-radius:10px}
-@media print{
-  /* Hide everything except the printable receipt */
-  body > *{ display:none !important }
-  #receipt-print-frame{
-    display:block !important;
-    position:fixed !important;
-    inset:0 !important;
-    background:#fff !important;
-    z-index:99999 !important;
-    padding:8mm !important;
-    font-family:monospace !important;
-  }
-  .no-print{ display:none !important }
-  /* Receipt styles for print */
-  #receipt-print-frame *{ max-width:80mm }
-  #receipt-print-frame img{ max-height:50px; display:block; margin:0 auto 8px }
-}
-/* Hidden until print */
-#receipt-print-frame{ display:none }
+/* Printing is handled by opening a new window with just the receipt HTML
+   (see printReceipt() below). That avoids the multi-page clipping that
+   happened when we used position:fixed on an in-page #receipt-print-frame. */
 </style>
 </head>
 <body>
@@ -1037,13 +1021,49 @@ function showReceipt(data){
 }
 
 // ── Print Receipt ──────────────────────────────────────────────
+// We open a dedicated print window and let the browser paginate normally,
+// because the previous in-page approach used position:fixed; inset:0 which
+// clipped the receipt to a single viewport-height — long carts (10+ items)
+// printed only the first page. A standalone window with the receipt as its
+// only content prints all pages on every browser, including thermal
+// printers in 80mm mode.
 window.printReceipt=function(){
-    // Clone the printable receipt into a hidden frame and print it
     const content=document.getElementById('printable-receipt').innerHTML;
-    let frame=document.getElementById('receipt-print-frame');
-    if(!frame){frame=document.createElement('div');frame.id='receipt-print-frame';document.body.appendChild(frame);}
-    frame.innerHTML=`<div style="font-family:monospace;font-size:11pt;max-width:80mm;margin:0 auto">${content}</div>`;
-    window.print();
+    const w=window.open('','bs_receipt_print','width=420,height=640');
+    if(!w){alert('Please allow pop-ups to print the receipt.');return;}
+    // Build a minimal, isolated document. No theme CSS, no plugin CSS —
+    // only what the receipt needs. @page rules give the printer a thermal
+    // 80mm hint without breaking A4 fallback.
+    w.document.open();
+    w.document.write(
+        '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+        +'<title>Receipt</title>'
+        +'<style>'
+        +'  @page{size:80mm auto;margin:4mm}'
+        +'  *{box-sizing:border-box}'
+        +'  html,body{margin:0;padding:0;background:#fff;color:#000;'
+        +'    font-family:"Courier New",monospace;font-size:11pt;line-height:1.35}'
+        +'  body{padding:6px}'
+        +'  /* Remove any width caps the cloned markup brings with it. */'
+        +'  body *{max-width:none !important}'
+        +'  img{max-height:60px;display:block;margin:0 auto 6px}'
+        +'  /* Avoid splitting an item line across pages. */'
+        +'  #r-items > div{page-break-inside:avoid;break-inside:avoid}'
+        +'  /* Hide on-screen-only controls if they slipped through. */'
+        +'  .no-print{display:none !important}'
+        +'</style>'
+        +'</head><body>'+content+'</body></html>'
+    );
+    w.document.close();
+    // Wait for layout/images, then print. Some browsers fire load synchronously
+    // for blank docs; setTimeout makes Safari/Firefox happy too.
+    var doPrint=function(){try{w.focus();w.print();}catch(e){}
+        // Close after the print dialog returns. Leave a small delay so the
+        // dialog has time to render before we close the window.
+        setTimeout(function(){try{w.close();}catch(e){}},500);
+    };
+    if(w.document.readyState==='complete'){setTimeout(doPrint,150);}
+    else{w.addEventListener('load',doPrint);setTimeout(doPrint,800);}
 };
 window.sendEmailReceipt=function(){
     const email=document.getElementById('r-email').value.trim();
