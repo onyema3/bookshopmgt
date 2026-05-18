@@ -4,6 +4,30 @@
     var ajax=BSPortal.ajax_url;
     var cur=BSPortal.currency||'₦';
 
+    // ── Modal open/close ─────────────────────────────────────────────────────
+    function openPortalModal(){
+        var $m=$('#bsp-portal-modal');
+        if(!$m.length) return;
+        $m.removeAttr('hidden').addClass('is-open');
+        $('body').addClass('bsp-modal-open');
+        // Focus the first input or button for accessibility
+        setTimeout(function(){
+            var $f=$m.find('input,button').not('[data-bsp-close]').first();
+            if($f.length) $f.focus();
+        },50);
+    }
+    function closePortalModal(){
+        var $m=$('#bsp-portal-modal');
+        if(!$m.length) return;
+        $m.attr('hidden','hidden').removeClass('is-open');
+        $('body').removeClass('bsp-modal-open');
+    }
+    $(document).on('click','#bsp-portal-open',openPortalModal);
+    $(document).on('click','[data-bsp-close]',closePortalModal);
+    $(document).on('keydown',function(e){
+        if(e.key==='Escape' && $('#bsp-portal-modal.is-open').length) closePortalModal();
+    });
+
     // ── Tabs ────────────────────────────────────────────────────────────────
     $(document).on('click','.bsp-tab',function(){
         var tab=$(this).data('tab');

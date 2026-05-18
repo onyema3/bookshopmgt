@@ -8,7 +8,10 @@ if(!defined('ABSPATH'))exit;
 add_shortcode('bookshop_portal','bs_portal_shortcode');
 
 function bs_portal_shortcode($atts){
-    $a=shortcode_atts(['title'=>'My Account'],$atts);
+    $a=shortcode_atts([
+        'title'      =>'My Account',
+        'button_text'=>'Access My Account',
+    ],$atts);
     wp_enqueue_style('bs-portal',BOOKSHOP_URL.'assets/css/portal.css',[],BOOKSHOP_VERSION);
     wp_enqueue_script('bs-portal',BOOKSHOP_URL.'assets/js/portal.js',['jquery'],BOOKSHOP_VERSION,true);
     wp_localize_script('bs-portal','BSPortal',[
@@ -19,17 +22,34 @@ function bs_portal_shortcode($atts){
 
     // Check if customer already has a session
     $cid=intval(get_transient('bs_portal_customer_'.session_id()));
+    $is_logged_in=$cid && ($customer=bs_get_customer($cid));
 
     ob_start();
-    echo '<div class="bs-portal-wrap" id="bs-portal">';
+    ?>
+    <div class="bs-portal-trigger-wrap">
+        <button type="button" class="bsp-btn bsp-btn-primary bsp-portal-open" id="bsp-portal-open"
+            style="max-width:260px;width:auto;padding:12px 22px">
+            <?=esc_html($is_logged_in?$customer->name:$a['button_text'])?>
+        </button>
+    </div>
 
-    if($cid && ($customer=bs_get_customer($cid))){
-        bs_render_portal_dashboard($customer);
-    } else {
-        bs_render_portal_login($a['title']);
-    }
-
-    echo '</div>';
+    <div class="bsp-modal" id="bsp-portal-modal" role="dialog" aria-modal="true"
+         aria-labelledby="bsp-portal-modal-title" hidden>
+        <div class="bsp-modal-backdrop" data-bsp-close></div>
+        <div class="bsp-modal-dialog" role="document">
+            <button type="button" class="bsp-modal-close" data-bsp-close aria-label="Close">&times;</button>
+            <div class="bs-portal-wrap" id="bs-portal">
+            <?php
+            if($is_logged_in){
+                bs_render_portal_dashboard($customer);
+            } else {
+                bs_render_portal_login($a['title']);
+            }
+            ?>
+            </div>
+        </div>
+    </div>
+    <?php
     return ob_get_clean();
 }
 

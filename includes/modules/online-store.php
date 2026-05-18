@@ -65,10 +65,8 @@ function bs_update_online_order_status($id,$status){
         bs_complete_online_order($id);
     }
 
-    // Optional customer notification on key transitions
-    if(in_array($status,['ready','completed','cancelled'],true)){
-        bs_notify_online_order_status_change($id,$status);
-    }
+    // Notify the customer on every real status transition
+    bs_notify_online_order_status_change($id,$status,$order->status);
 
     return['ok'=>true,'status'=>$status];
 }
@@ -152,25 +150,93 @@ function bs_complete_online_order($order_id){
 }
 
 /**
- * Notify the customer of an online-order status change (best-effort email).
+ * Notify the customer of an online-order status change.
+ * Sends an HTML email with the new status, order summary, and items list.
+ * Returns true if the email was sent, false otherwise.
  */
-function bs_notify_online_order_status_change($order_id,$status){
+function bs_notify_online_order_status_change($order_id,$status,$prev_status=''){
     global $wpdb;
     $order=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",intval($order_id)));
-    if(!$order||!$order->customer_email) return false;
+    if(!$order||!$order->customer_email||!is_email($order->customer_email)) return false;
+
     $shop=get_option('bookshop_receipt_header',get_bloginfo('name'));
-    $subject_map=[
-        'ready'    =>"[$shop] Your order {$order->ref} is ready",
-        'completed'=>"[$shop] Order {$order->ref} completed — thank you!",
-        'cancelled'=>"[$shop] Order {$order->ref} cancelled",
+    $type=($order->type==='delivery')?'delivery':'collection';
+
+    // Per-status copy: subject + headline + intro paragraph
+    $copy=[
+        'pending'    =>['Order received','We\'ve received your order and it is awaiting confirmation.','#856404','#fff3cd'],
+        'paid'       =>['Payment confirmed','Thanks — we\'ve confirmed your payment and will start preparing your order shortly.','#004085','#cce5ff'],
+        'processing' =>['Order being prepared','Good news — your order is being prepared right now.','#5d4a00','#fff3cd'],
+        'ready'      =>['Order ready for '.$type,'Your order is ready for '.$type.'. Please come by at your convenience.','#2a7a3b','#d4edda'],
+        'completed'  =>['Order completed','Your order has been completed. Thank you for shopping with us!','#2a7a3b','#d4edda'],
+        'cancelled'  =>['Order cancelled','Your order has been cancelled. If this is unexpected, please reply to this email or contact us.','#c0392b','#f8d7da'],
     ];
-    $body_map=[
-        'ready'    =>"Hello {$order->customer_name},\n\nYour order {$order->ref} is ready for ".($order->type==='delivery'?'delivery':'collection').".\n\nTotal: ".bs_fmt($order->total)."\n\nThank you!",
-        'completed'=>"Hello {$order->customer_name},\n\nYour order {$order->ref} has been completed.\n\nTotal: ".bs_fmt($order->total)."\n\nThank you for your purchase!",
-        'cancelled'=>"Hello {$order->customer_name},\n\nYour order {$order->ref} has been cancelled. If this is unexpected, please contact us.\n\nThank you.",
-    ];
-    if(!isset($subject_map[$status])) return false;
-    return wp_mail($order->customer_email,$subject_map[$status],$body_map[$status],['Content-Type: text/plain; charset=UTF-8']);
+    if(!isset($copy[$status])) return false;
+    list($headline,$intro,$badge_color,$badge_bg)=$copy[$status];
+
+    $subject="[$shop] Order {$order->ref} — $headline";
+
+    // Item rows
+    $items=json_decode($order->items_data,true)?:[];
+    $rows='';
+    foreach($items as $i){
+        $title=esc_html($i['title']??'Item');
+        $qty=intval($i['qty']??1);
+        $price=floatval($i['price']??0);
+        $line=$price*$qty;
+        $rows.="<tr>
+            <td style='padding:8px 10px;border-bottom:1px solid #f0e8d8'>$title</td>
+            <td style='padding:8px 10px;border-bottom:1px solid #f0e8d8;text-align:center'>$qty</td>
+            <td style='padding:8px 10px;border-bottom:1px solid #f0e8d8;text-align:right'>".bs_fmt($line)."</td>
+        </tr>";
+    }
+    if(!$rows){
+        $rows="<tr><td colspan='3' style='padding:10px;color:#8a7a65;text-align:center'>(items unavailable)</td></tr>";
+    }
+
+    $prev_html=$prev_status?"<span style='color:#8a7a65;font-size:.85em'>(was ".esc_html(ucfirst($prev_status)).")</span>":'';
+
+    $html="<div style=\"font-family:Georgia,serif;max-width:560px;margin:auto;background:#fdf8f0;padding:28px;border-radius:10px;color:#1a1208\">
+        <h2 style=\"margin:0 0 4px;font-family:'Playfair Display',Georgia,serif\">$shop</h2>
+        <p style='margin:0 0 18px;color:#8a7a65;font-size:.9em'>Order update — Ref: <strong>".esc_html($order->ref)."</strong></p>
+
+        <div style=\"display:inline-block;padding:6px 14px;border-radius:20px;background:$badge_bg;color:$badge_color;font-weight:700;font-size:.9em;text-transform:uppercase;letter-spacing:.04em\">".esc_html(ucfirst($status))."</div>
+        $prev_html
+
+        <h3 style=\"margin:18px 0 6px;font-family:'Playfair Display',Georgia,serif\">$headline</h3>
+        <p style='margin:0 0 18px;line-height:1.5'>Hello ".esc_html($order->customer_name).",<br>$intro</p>
+
+        <table style='width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden'>
+            <thead>
+                <tr style='background:#1a1208;color:#f5d87a'>
+                    <th style='padding:8px 10px;text-align:left'>Book</th>
+                    <th style='padding:8px 10px;text-align:center'>Qty</th>
+                    <th style='padding:8px 10px;text-align:right'>Total</th>
+                </tr>
+            </thead>
+            <tbody>$rows</tbody>
+        </table>
+
+        <table style='margin-top:14px;width:100%'>
+            <tr>
+                <td style='font-weight:700;font-size:1.05em'>TOTAL</td>
+                <td style='text-align:right;font-weight:700;font-size:1.05em'>".bs_fmt($order->total)."</td>
+            </tr>
+            <tr>
+                <td style='color:#8a7a65;font-size:.85em'>Type</td>
+                <td style='text-align:right;color:#8a7a65;font-size:.85em'>".esc_html(ucfirst($order->type))."</td>
+            </tr>
+        </table>
+
+        <p style='margin-top:22px;color:#8a7a65;font-size:.82em'>Thank you for shopping with us! — $shop</p>
+    </div>";
+
+    return wp_mail(
+        $order->customer_email,
+        $subject,
+        $html,
+        ['Content-Type: text/html; charset=UTF-8']
+    );
 }
 
 // ── Shortcode: Book Catalogue ─────────────────────────────────────────────────
