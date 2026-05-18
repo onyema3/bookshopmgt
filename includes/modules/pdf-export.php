@@ -11,21 +11,27 @@ add_action('init',function(){
     if(!bs_user_can_manage()) wp_die('Unauthorized');
     $from=sanitize_text_field($_GET['from']??date('Y-m-01'));
     $to  =sanitize_text_field($_GET['to']??date('Y-m-d'));
-    bs_render_printable_report($from,$to);
+    $branch=intval($_GET['branch']??0);
+    bs_render_printable_report($from,$to,$branch);
     exit;
 });
 
-function bs_render_printable_report($from,$to){
-    $sum   =bs_report_summary($from,$to);
-    $top   =bs_report_top_books($from,$to,20);
-    $staff =bs_report_staff($from,$to);
-    $profit=bs_report_profit($from,$to);
-    $daily =bs_report_daily($from,$to);
-    $pay   =bs_report_payment_methods($from,$to);
+function bs_render_printable_report($from,$to,$branch_id=0){
+    $sum   =bs_report_summary($from,$to,$branch_id);
+    $top   =bs_report_top_books($from,$to,20,$branch_id);
+    $staff =bs_report_staff($from,$to,$branch_id);
+    $profit=bs_report_profit($from,$to,$branch_id);
+    $daily =bs_report_daily($from,$to,$branch_id);
+    $pay   =bs_report_payment_methods($from,$to,$branch_id);
     $shop  =get_option('bookshop_receipt_header',get_bloginfo('name'));
     $cur   =bs_currency();
     $logo  =get_option('bookshop_logo_url','');
     $addr  =get_option('bookshop_address','');
+    $branch_label='';
+    if($branch_id && function_exists('bs_get_branch')){
+        $b=bs_get_branch($branch_id);
+        if($b) $branch_label=$b->name;
+    }
     $from_fmt=wp_date('d M Y',strtotime($from));
     $to_fmt  =wp_date('d M Y',strtotime($to));
     $gross   =floatval($profit->gross_profit??0);
@@ -76,6 +82,7 @@ tr:nth-child(even) td{background:#fdf8f0}
     <div class="rp-shop"><?=esc_html($shop)?></div>
     <?php if($addr): ?><div style="font-size:.82rem;color:#666;margin-top:4px"><?=esc_html($addr)?></div><?php endif; ?>
     <div class="rp-period">Sales Report &mdash; <?=$from_fmt?> to <?=$to_fmt?></div>
+    <?php if($branch_label): ?><div style="font-size:.82rem;color:#8a5c00;margin-top:2px;font-weight:600">🏪 <?=esc_html($branch_label)?></div><?php endif; ?>
     <div style="font-size:.78rem;color:#aaa;margin-top:4px">Generated <?=wp_date('d M Y H:i')?></div>
 </div>
 
@@ -147,8 +154,11 @@ tr:nth-child(even) td{background:#fdf8f0}
 // ── AJAX: Get print report URL ────────────────────────────────────────────────
 add_action('wp_ajax_bs_get_print_url',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized');
-    $from=sanitize_text_field($_GET['from']??date('Y-m-01'));
-    $to  =sanitize_text_field($_GET['to']??date('Y-m-d'));
-    $url =home_url("/?bookshop_print_report=1&from=$from&to=$to");
+    $from  =sanitize_text_field($_GET['from']??date('Y-m-01'));
+    $to    =sanitize_text_field($_GET['to']??date('Y-m-d'));
+    $branch=intval($_GET['branch']??0);
+    $args  =['bookshop_print_report'=>1,'from'=>$from,'to'=>$to];
+    if($branch) $args['branch']=$branch;
+    $url   =home_url('/?'.http_build_query($args));
     wp_send_json_success(['url'=>$url]);
 });
