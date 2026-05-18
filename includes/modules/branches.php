@@ -125,6 +125,34 @@ function bs_set_branch_stock($branch_id,$book_id,$qty){
     }
     bs_audit('branch_stock_set','branch_stock',$book_id,"Branch $branch_id: book $book_id qty=".intval($qty));
 }
+
+/**
+ * Apply a delta (positive or negative) to per-branch stock.
+ *
+ * Used by sale / void / refund flows where the global bookshop_books.stock_qty
+ * is also being adjusted. Idempotently inserts a row at qty=0 first if the
+ * branch hasn't tracked this book yet, then performs a single UPDATE that
+ * clamps at zero so we never go negative.
+ *
+ * Returns true on success, false if the inputs are invalid. Silently no-ops
+ * when $branch_id is 0 so callers can pass through historical sales whose
+ * branch_id is NULL without special-casing.
+ */
+function bs_adjust_branch_stock($branch_id,$book_id,$delta){
+    global $wpdb;
+    $branch_id=intval($branch_id); $book_id=intval($book_id); $delta=intval($delta);
+    if(!$branch_id||!$book_id||$delta===0) return false;
+    // Ensure a row exists so the UPDATE below has something to touch.
+    $wpdb->query($wpdb->prepare(
+        "INSERT IGNORE INTO {$wpdb->prefix}bookshop_branch_stock (branch_id,book_id,qty) VALUES (%d,%d,0)",
+        $branch_id,$book_id));
+    $wpdb->query($wpdb->prepare(
+        "UPDATE {$wpdb->prefix}bookshop_branch_stock
+            SET qty = GREATEST(0, qty + %d)
+          WHERE branch_id=%d AND book_id=%d",
+        $delta,$branch_id,$book_id));
+    return true;
+}
 function bs_transfer_stock($from_branch,$to_branch,$book_id,$qty){
     global $wpdb;
     $qty=intval($qty);

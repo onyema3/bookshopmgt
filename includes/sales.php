@@ -84,6 +84,12 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
             "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=GREATEST(0,stock_qty-%d) WHERE id=%d",
             $qty, $bid
         ));
+        // Per-branch stock decrement. Skipped silently when branch_id is 0
+        // (historical / API-only paths) so the global stock is still the
+        // source of truth in those cases.
+        if ( !empty($o['branch_id']) ) {
+            bs_adjust_branch_stock( intval($o['branch_id']), $bid, -$qty );
+        }
     }
 
     // Update promo usage
@@ -136,6 +142,12 @@ function bs_void_sale( $sale_id ) {
             "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=stock_qty+%d WHERE id=%d",
             $item->qty, $item->book_id
         ));
+        // Mirror the restock at the branch the sale was made from. Sales
+        // recorded before the v4 migration have branch_id=NULL and so are
+        // skipped here (they only ever decremented global stock).
+        if ( !empty($sale->branch_id) ) {
+            bs_adjust_branch_stock( intval($sale->branch_id), intval($item->book_id), intval($item->qty) );
+        }
     }
     bs_audit('sale_voided','sale',$sale_id,"Voided sale {$sale->sale_ref}");
     return true;
@@ -151,10 +163,11 @@ function bs_get_sale( $id ) {
 
 function bs_get_sales( $args = [] ) {
     global $wpdb;
-    $a = wp_parse_args($args,['staff_id'=>0,'customer_id'=>0,'from'=>'','to'=>'','limit'=>100,'offset'=>0,'status'=>'']);
+    $a = wp_parse_args($args,['staff_id'=>0,'customer_id'=>0,'branch_id'=>0,'from'=>'','to'=>'','limit'=>100,'offset'=>0,'status'=>'']);
     $where=['1=1']; $p=[];
     if ($a['staff_id'])    { $where[]='s.staff_id=%d';       $p[]=$a['staff_id']; }
     if ($a['customer_id']) { $where[]='s.customer_id=%d';    $p[]=$a['customer_id']; }
+    if ($a['branch_id'])   { $where[]='s.branch_id=%d';      $p[]=$a['branch_id']; }
     if ($a['from'])        { $where[]='DATE(s.created_at)>=%s'; $p[]=$a['from']; }
     if ($a['to'])          { $where[]='DATE(s.created_at)<=%s'; $p[]=$a['to']; }
     if ($a['status'])      { $where[]='s.status=%s';         $p[]=$a['status']; }

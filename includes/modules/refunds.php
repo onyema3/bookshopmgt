@@ -62,6 +62,11 @@ function bs_create_refund($sale_id,$items_to_refund,$reason='',$restock=true){
                 "UPDATE {$wpdb->prefix}bookshop_books SET stock_qty=stock_qty+%d WHERE id=%d",
                 $ri['qty'],$ri['book_id']
             ));
+            // Restore at the same branch the original sale was made from.
+            // Pre-migration sales have a NULL branch_id and are skipped.
+            if ( !empty($sale->branch_id) ) {
+                bs_adjust_branch_stock( intval($sale->branch_id), intval($ri['book_id']), intval($ri['qty']) );
+            }
         }
     }
     bs_audit('refund_created','refund',$refund_id,"Refund $ref for sale {$sale->sale_ref} — ".bs_fmt($refund_total).". Reason: $reason");

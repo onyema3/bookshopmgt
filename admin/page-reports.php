@@ -4,16 +4,30 @@ if(!defined('ABSPATH'))exit;
 function bs_page_reports(){
     $from = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
     $to   = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
+    $branch_id = intval($_GET['branch'] ?? 0);
 
-    $sum    = bs_report_summary($from,$to);
-    $profit = bs_report_profit($from,$to);
-    $top    = bs_report_top_books($from,$to,15);
-    $staff  = bs_report_staff($from,$to);
-    $daily  = bs_report_daily($from,$to);
-    $genre  = bs_report_genre($from,$to);
-    $slow   = bs_report_slow_movers(30,15);
-    $hourly = bs_report_hourly($from,$to);
-    $pay    = bs_report_payment_methods($from,$to);
+    // Build the branch picker once and validate the requested ID against the
+    // active branches list so a stale URL can't poison every query below.
+    $branches = function_exists('bs_get_branches') ? bs_get_branches(true) : [];
+    if ( $branch_id ) {
+        $valid = false;
+        foreach ( $branches as $b ) { if ( intval($b->id) === $branch_id ) { $valid = true; break; } }
+        if ( !$valid ) $branch_id = 0;
+    }
+    $branch_label = '';
+    if ( $branch_id ) {
+        foreach ( $branches as $b ) { if ( intval($b->id) === $branch_id ) { $branch_label = $b->name; break; } }
+    }
+
+    $sum    = bs_report_summary($from,$to,$branch_id);
+    $profit = bs_report_profit($from,$to,$branch_id);
+    $top    = bs_report_top_books($from,$to,15,$branch_id);
+    $staff  = bs_report_staff($from,$to,$branch_id);
+    $daily  = bs_report_daily($from,$to,$branch_id);
+    $genre  = bs_report_genre($from,$to,$branch_id);
+    $slow   = bs_report_slow_movers(30,15,$branch_id);
+    $hourly = bs_report_hourly($from,$to,$branch_id);
+    $pay    = bs_report_payment_methods($from,$to,$branch_id);
 
     $rev    = floatval($sum->revenue ?? 0);
     $gross  = floatval($profit->gross_profit ?? 0);
@@ -23,17 +37,22 @@ function bs_page_reports(){
     $avg    = $cnt > 0 ? $rev/$cnt : 0;
 
     $base_url = admin_url('admin-ajax.php');
-    $qs = http_build_query(['from'=>$from,'to'=>$to]);
+    $qs_args  = ['from'=>$from,'to'=>$to];
+    if ( $branch_id ) $qs_args['branch'] = $branch_id;
+    $qs = http_build_query($qs_args);
+    // Same query string as a path fragment for the printable report URL
+    // (which uses home_url, not admin-ajax).
+    $print_qs = http_build_query($qs_args);
     ?>
     <div class="wrap bs-wrap">
     <div class="bs-header">
-        <h1>📊 Reports & Analytics</h1>
+        <h1>📊 Reports & Analytics<?php if($branch_label): ?> <span style="font-size:.65em;color:var(--muted);font-weight:500">— <?=esc_html($branch_label)?></span><?php endif; ?></h1>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
             <a href="<?=$base_url?>?action=bs_export_sales_csv&<?=$qs?>" class="bs-btn bs-btn-secondary" title="Export sales to CSV">📄 CSV</a>
             <a href="<?=$base_url?>?action=bs_export_sales_json&<?=$qs?>" class="bs-btn bs-btn-secondary" title="Export sales to JSON">{ } JSON</a>
-            <a href="<?=$base_url?>?action=bs_export_inventory_csv" class="bs-btn bs-btn-secondary" title="Export full inventory">📦 Inventory</a>
+            <a href="<?=$base_url?>?action=bs_export_inventory_csv<?=$branch_id?'&branch='.$branch_id:''?>" class="bs-btn bs-btn-secondary" title="Export full inventory">📦 Inventory</a>
             <a href="<?=$base_url?>?action=bs_export_report_pdf&<?=$qs?>" class="bs-btn bs-btn-primary" title="Download PDF report" style="background:#c0392b">📥 PDF</a>
-            <a href="<?=home_url('/?bookshop_print_report=1&from='.urlencode($from).'&to='.urlencode($to))?>" target="_blank" class="bs-btn bs-btn-secondary" title="Open printable PDF-ready report">🖨️ Print</a>
+            <a href="<?=home_url('/?bookshop_print_report=1&'.$print_qs)?>" target="_blank" class="bs-btn bs-btn-secondary" title="Open printable PDF-ready report">🖨️ Print</a>
         </div>
     </div>
 
@@ -51,10 +70,11 @@ function bs_page_reports(){
             'Last 7 Days' => [date('Y-m-d',strtotime('-7 days')), date('Y-m-d')],
             'Last 30 Days'=> [date('Y-m-d',strtotime('-30 days')), date('Y-m-d')],
         ];
+        $branch_qs = $branch_id ? '&branch='.$branch_id : '';
         foreach($shortcuts as $label=>[$f,$t]):
             $active = $from===$f&&$to===$t ? 'bs-btn-primary' : 'bs-btn-secondary';
         ?>
-        <a href="?page=bookshop-reports&from=<?=$f?>&to=<?=$t?>" class="bs-btn <?=$active?>" style="font-size:.75rem;padding:5px 10px"><?=$label?></a>
+        <a href="?page=bookshop-reports&from=<?=$f?>&to=<?=$t?><?=$branch_qs?>" class="bs-btn <?=$active?>" style="font-size:.75rem;padding:5px 10px"><?=$label?></a>
         <?php endforeach; ?>
         <label style="display:flex;align-items:center;gap:4px;font-size:.83rem">
             From <input type="date" name="from" value="<?=esc_attr($from)?>" class="bs-input-sm">
@@ -62,6 +82,16 @@ function bs_page_reports(){
         <label style="display:flex;align-items:center;gap:4px;font-size:.83rem">
             To <input type="date" name="to" value="<?=esc_attr($to)?>" class="bs-input-sm">
         </label>
+        <?php if(!empty($branches)): ?>
+        <label style="display:flex;align-items:center;gap:4px;font-size:.83rem">
+            🏪 <select name="branch" class="bs-input-sm" style="min-width:140px">
+                <option value="0">All branches</option>
+                <?php foreach($branches as $b): ?>
+                <option value="<?=intval($b->id)?>" <?=selected($branch_id,intval($b->id),false)?>><?=esc_html($b->name)?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <?php endif; ?>
         <button class="bs-btn bs-btn-secondary">Apply</button>
     </form>
 
@@ -232,15 +262,33 @@ function bs_page_reports(){
     <div id="rpt-inventory" class="bs-tab-content" style="display:none">
         <?php
         global $wpdb;
-        $inv_stats = $wpdb->get_row("SELECT
-            COUNT(*) as total_titles,
-            SUM(stock_qty) as total_units,
-            SUM(stock_qty * cost_price) as inventory_cost,
-            SUM(stock_qty * sell_price) as inventory_value,
-            SUM(stock_qty * (sell_price-cost_price)) as potential_profit,
-            SUM(CASE WHEN stock_qty=0 THEN 1 ELSE 0 END) as out_of_stock,
-            SUM(CASE WHEN stock_qty>0 AND stock_qty<=low_stock_threshold THEN 1 ELSE 0 END) as low_stock
-            FROM {$wpdb->prefix}bookshop_books WHERE status='active'");
+        if ( $branch_id ) {
+            // Per-branch inventory: stock comes from bookshop_branch_stock,
+            // joined back to books for prices & low-stock thresholds.
+            $inv_stats = $wpdb->get_row($wpdb->prepare(
+                "SELECT COUNT(*) as total_titles,
+                        SUM(bst.qty) as total_units,
+                        SUM(bst.qty * b.cost_price) as inventory_cost,
+                        SUM(bst.qty * b.sell_price) as inventory_value,
+                        SUM(bst.qty * (b.sell_price-b.cost_price)) as potential_profit,
+                        SUM(CASE WHEN bst.qty=0 THEN 1 ELSE 0 END) as out_of_stock,
+                        SUM(CASE WHEN bst.qty>0 AND bst.qty<=b.low_stock_threshold THEN 1 ELSE 0 END) as low_stock
+                 FROM {$wpdb->prefix}bookshop_branch_stock bst
+                 JOIN {$wpdb->prefix}bookshop_books b ON b.id=bst.book_id
+                 WHERE bst.branch_id=%d AND b.status='active'",
+                $branch_id
+            ));
+        } else {
+            $inv_stats = $wpdb->get_row("SELECT
+                COUNT(*) as total_titles,
+                SUM(stock_qty) as total_units,
+                SUM(stock_qty * cost_price) as inventory_cost,
+                SUM(stock_qty * sell_price) as inventory_value,
+                SUM(stock_qty * (sell_price-cost_price)) as potential_profit,
+                SUM(CASE WHEN stock_qty=0 THEN 1 ELSE 0 END) as out_of_stock,
+                SUM(CASE WHEN stock_qty>0 AND stock_qty<=low_stock_threshold THEN 1 ELSE 0 END) as low_stock
+                FROM {$wpdb->prefix}bookshop_books WHERE status='active'");
+        }
         ?>
         <div class="bs-stats-row" style="margin-bottom:20px">
             <?php
@@ -255,11 +303,30 @@ function bs_page_reports(){
         </div>
         <div class="bs-report-card">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <h3>📦 Full Inventory Valuation</h3>
-                <a href="<?=$base_url?>?action=bs_export_inventory_csv" class="bs-btn bs-btn-secondary" style="font-size:.78rem">⬇ Export</a>
+                <h3>📦 Full Inventory Valuation<?php if($branch_label): ?> <span style="font-size:.78rem;color:var(--muted);font-weight:400">— <?=esc_html($branch_label)?></span><?php endif; ?></h3>
+                <a href="<?=$base_url?>?action=bs_export_inventory_csv<?=$branch_id?'&branch='.$branch_id:''?>" class="bs-btn bs-btn-secondary" style="font-size:.78rem">⬇ Export</a>
             </div>
             <?php
-            $all_books = bs_get_books(['status'=>'active','limit'=>500]);
+            if ( $branch_id ) {
+                // bs_get_branch_stock with no book_id returns rows joined to books.
+                // Re-shape them so the table loop below can stay almost identical.
+                $rows = bs_get_branch_stock( $branch_id );
+                $all_books = [];
+                foreach ( $rows as $r ) {
+                    $all_books[] = (object)[
+                        'id'                  => intval($r->book_id),
+                        'title'               => $r->title,
+                        'author'              => $r->author,
+                        'genre'               => $r->genre ?? '',
+                        'cost_price'          => floatval($r->cost_price),
+                        'sell_price'          => floatval($r->sell_price),
+                        'stock_qty'           => intval($r->qty),
+                        'low_stock_threshold' => intval($r->low_stock_threshold),
+                    ];
+                }
+            } else {
+                $all_books = bs_get_books(['status'=>'active','limit'=>500]);
+            }
             ?>
             <div style="overflow-x:auto;max-height:500px;overflow-y:auto">
             <table class="bs-table bs-table-sm">

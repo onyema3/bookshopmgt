@@ -1,12 +1,18 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Every report below accepts an optional $branch_id (0 = all branches).
+// The branch filter is applied as `s.branch_id = %d` on the sales table; when
+// 0 is passed we leave the WHERE alone so pre-v4 sales (branch_id NULL) and
+// post-v4 sales are both included.
+
 // ── Summary ───────────────────────────────────────────────────────────────────
-function bs_report_summary( $from = '', $to = '' ) {
+function bs_report_summary( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 'branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT COUNT(*) AS sales_count,
                    SUM(total)          AS revenue,
@@ -20,11 +26,12 @@ function bs_report_summary( $from = '', $to = '' ) {
 }
 
 // ── Daily ─────────────────────────────────────────────────────────────────────
-function bs_report_daily( $from = '', $to = '' ) {
+function bs_report_daily( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 'branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT DATE(created_at) AS day, COUNT(*) AS sales_count, SUM(total) AS revenue
             FROM {$wpdb->prefix}bookshop_sales WHERE $wh
@@ -33,11 +40,12 @@ function bs_report_daily( $from = '', $to = '' ) {
 }
 
 // ── Hourly ────────────────────────────────────────────────────────────────────
-function bs_report_hourly( $from = '', $to = '' ) {
+function bs_report_hourly( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 'branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT HOUR(created_at) AS hr, COUNT(*) AS sales_count, SUM(total) AS revenue
             FROM {$wpdb->prefix}bookshop_sales WHERE $wh
@@ -53,11 +61,12 @@ function bs_report_hourly( $from = '', $to = '' ) {
 }
 
 // ── Top Books ─────────────────────────────────────────────────────────────────
-function bs_report_top_books( $from = '', $to = '', $limit = 10 ) {
+function bs_report_top_books( $from = '', $to = '', $limit = 10, $branch_id = 0 ) {
     global $wpdb;
     $w = ["s.status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 's.branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w ); $p[] = intval($limit);
     $sql = "SELECT b.title, b.author, b.genre,
                    SUM(si.qty)                           AS units_sold,
@@ -73,11 +82,12 @@ function bs_report_top_books( $from = '', $to = '', $limit = 10 ) {
 }
 
 // ── Staff ─────────────────────────────────────────────────────────────────────
-function bs_report_staff( $from = '', $to = '' ) {
+function bs_report_staff( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["s.status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 's.branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT u.display_name AS staff_name,
                    COUNT(s.id) AS sales_count,
@@ -90,11 +100,12 @@ function bs_report_staff( $from = '', $to = '' ) {
 }
 
 // ── Genre ─────────────────────────────────────────────────────────────────────
-function bs_report_genre( $from = '', $to = '' ) {
+function bs_report_genre( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["s.status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 's.branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT b.genre, SUM(si.qty) AS units_sold, SUM(si.line_total) AS revenue
             FROM {$wpdb->prefix}bookshop_sale_items si
@@ -105,11 +116,12 @@ function bs_report_genre( $from = '', $to = '' ) {
 }
 
 // ── Payment Methods ───────────────────────────────────────────────────────────
-function bs_report_payment_methods( $from = '', $to = '' ) {
+function bs_report_payment_methods( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 'branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT payment_method, COUNT(*) AS count, SUM(total) AS revenue, SUM(discount) AS discounts
             FROM {$wpdb->prefix}bookshop_sales WHERE $wh
@@ -118,9 +130,32 @@ function bs_report_payment_methods( $from = '', $to = '' ) {
 }
 
 // ── Slow Movers ───────────────────────────────────────────────────────────────
-function bs_report_slow_movers( $days = 30, $limit = 20 ) {
+// Branch-aware variant: when $branch_id is set, "stock" comes from
+// bookshop_branch_stock instead of the global stock_qty, and the sales join
+// is scoped to that branch.
+function bs_report_slow_movers( $days = 30, $limit = 20, $branch_id = 0 ) {
     global $wpdb;
     $since = date( 'Y-m-d', strtotime("-{$days} days") );
+    $branch_id = intval($branch_id);
+
+    if ( $branch_id ) {
+        return $wpdb->get_results( $wpdb->prepare(
+            "SELECT b.*, bst.qty AS stock_qty,
+                    COALESCE(SUM(si.qty), 0) AS units_sold
+             FROM {$wpdb->prefix}bookshop_branch_stock bst
+             JOIN {$wpdb->prefix}bookshop_books b ON b.id = bst.book_id
+             LEFT JOIN {$wpdb->prefix}bookshop_sale_items si ON si.book_id = b.id
+             LEFT JOIN {$wpdb->prefix}bookshop_sales s
+                   ON s.id = si.sale_id
+                  AND DATE(s.created_at) >= %s
+                  AND s.status = 'completed'
+                  AND s.branch_id = %d
+             WHERE b.status = 'active' AND bst.branch_id = %d AND bst.qty > 0
+             GROUP BY b.id ORDER BY units_sold ASC, bst.qty DESC LIMIT %d",
+            $since, $branch_id, $branch_id, intval($limit)
+        ) );
+    }
+
     return $wpdb->get_results( $wpdb->prepare(
         "SELECT b.*,
                 COALESCE(SUM(si.qty), 0) AS units_sold
@@ -135,11 +170,12 @@ function bs_report_slow_movers( $days = 30, $limit = 20 ) {
 }
 
 // ── Profit ────────────────────────────────────────────────────────────────────
-function bs_report_profit( $from = '', $to = '' ) {
+function bs_report_profit( $from = '', $to = '', $branch_id = 0 ) {
     global $wpdb;
     $w = ["s.status='completed'"]; $p = [];
-    if ( $from ) { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
-    if ( $to )   { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $from )      { $w[] = 'DATE(s.created_at) >= %s'; $p[] = $from; }
+    if ( $to )        { $w[] = 'DATE(s.created_at) <= %s'; $p[] = $to; }
+    if ( $branch_id ) { $w[] = 's.branch_id = %d';         $p[] = intval($branch_id); }
     $wh = implode( ' AND ', $w );
     $sql = "SELECT SUM(si.line_total)                        AS revenue,
                    SUM(si.qty * b.cost_price)                AS cogs,
@@ -152,8 +188,8 @@ function bs_report_profit( $from = '', $to = '' ) {
 }
 
 // ── Export helpers ────────────────────────────────────────────────────────────
-function bs_export_sales_csv( $from = '', $to = '' ) {
-    $sales = bs_get_sales(['from'=>$from,'to'=>$to,'limit'=>10000]);
+function bs_export_sales_csv( $from = '', $to = '', $branch_id = 0 ) {
+    $sales = bs_get_sales(['from'=>$from,'to'=>$to,'branch_id'=>intval($branch_id),'limit'=>10000]);
     $rows  = [['Ref','Date','Time','Staff','Customer','Payment','Subtotal','Discount','Promo Discount','Tax','Total','Loyalty Earned','Status','Note']];
     foreach ( $sales as $s ) {
         $rows[] = [

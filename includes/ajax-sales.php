@@ -156,11 +156,13 @@ add_action('wp_ajax_bs_get_open_shift', function() {
 // ── Export: Sales CSV ─────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_sales_csv', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
-    $from  = sanitize_text_field($_GET['from'] ?? '');
-    $to    = sanitize_text_field($_GET['to']   ?? '');
-    $sales = bs_get_sales(['from'=>$from,'to'=>$to,'limit'=>10000]);
+    $from   = sanitize_text_field($_GET['from'] ?? '');
+    $to     = sanitize_text_field($_GET['to']   ?? '');
+    $branch = intval($_GET['branch'] ?? 0);
+    $sales  = bs_get_sales(['from'=>$from,'to'=>$to,'branch_id'=>$branch,'limit'=>10000]);
+    $suffix = $branch ? '-branch'.$branch : '';
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="sales-'.date('Y-m-d').'.csv"');
+    header('Content-Disposition: attachment; filename="sales-'.date('Y-m-d').$suffix.'.csv"');
     $f = fopen('php://output', 'w');
     fputcsv($f, ['Ref','Date','Time','Staff','Customer','Payment','Subtotal','Discount','Promo Discount','Tax','Total','Loyalty Earned','Status','Note']);
     foreach ( $sales as $s ) {
@@ -181,9 +183,10 @@ add_action('wp_ajax_bs_export_sales_csv', function() {
 // ── Export: Sales JSON ────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_sales_json', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
-    $from  = sanitize_text_field($_GET['from'] ?? '');
-    $to    = sanitize_text_field($_GET['to']   ?? '');
-    $sales = bs_get_sales(['from'=>$from,'to'=>$to,'limit'=>10000]);
+    $from   = sanitize_text_field($_GET['from'] ?? '');
+    $to     = sanitize_text_field($_GET['to']   ?? '');
+    $branch = intval($_GET['branch'] ?? 0);
+    $sales  = bs_get_sales(['from'=>$from,'to'=>$to,'branch_id'=>$branch,'limit'=>10000]);
     $out   = [];
     foreach ( $sales as $s ) {
         $items = bs_get_sale_items($s->id);
@@ -204,11 +207,12 @@ add_action('wp_ajax_bs_export_sales_json', function() {
     $payload = [
         'shop'        => get_option('bookshop_receipt_header', get_bloginfo('name')),
         'from'        => $from, 'to' => $to,
+        'branch_id'   => $branch ?: null,
         'exported_at' => current_time('c'),
         'sales'       => $out,
     ];
     header('Content-Type: application/json; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="sales-'.date('Y-m-d').'.json"');
+    header('Content-Disposition: attachment; filename="sales-'.date('Y-m-d').($branch?'-branch'.$branch:'').'.json"');
     echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
     exit;
 });
@@ -216,9 +220,25 @@ add_action('wp_ajax_bs_export_sales_json', function() {
 // ── Export: Inventory CSV ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_inventory_csv', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
-    $books = bs_get_books(['status'=>'','limit'=>10000]);
+    $branch = intval($_GET['branch'] ?? 0);
+    if ( $branch ) {
+        // Per-branch listing: stock comes from bookshop_branch_stock. Rows
+        // returned by bs_get_branch_stock are already joined to books, but
+        // they only carry a subset of columns — re-query for a complete row
+        // when we need fields like ISBN, publisher, location.
+        $rows = bs_get_branch_stock( $branch );
+        $books = [];
+        foreach ( $rows as $r ) {
+            $b = bs_get_book( intval($r->book_id) );
+            if ( !$b ) continue;
+            $b->stock_qty = intval($r->qty); // override global stock with branch stock
+            $books[] = $b;
+        }
+    } else {
+        $books = bs_get_books(['status'=>'','limit'=>10000]);
+    }
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="inventory-'.date('Y-m-d').'.csv"');
+    header('Content-Disposition: attachment; filename="inventory-'.date('Y-m-d').($branch?'-branch'.$branch:'').'.csv"');
     $f = fopen('php://output', 'w');
     fputcsv($f, ['Title','Author','ISBN','Barcode','Genre','Publisher','Year','Location','Cost Price','Sell Price','Margin %','Stock Qty','Stock Cost Value','Stock Sell Value','Low Stock Threshold','Status']);
     foreach ( $books as $b ) {
@@ -241,9 +261,12 @@ add_action('wp_ajax_bs_export_inventory_csv', function() {
 // Returns a self-contained HTML page that auto-triggers print dialog
 add_action('wp_ajax_bs_export_report_pdf', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
-    $from = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
-    $to   = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
+    $from   = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
+    $to     = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
+    $branch = intval($_GET['branch'] ?? 0);
+    $args   = ['bookshop_print_report'=>1,'from'=>$from,'to'=>$to,'auto_print'=>1];
+    if ( $branch ) $args['branch'] = $branch;
     // Redirect to the printable report page which handles PDF output
-    wp_redirect(home_url('/?bookshop_print_report=1&from='.urlencode($from).'&to='.urlencode($to).'&auto_print=1'));
+    wp_redirect( home_url('/?'.http_build_query($args)) );
     exit;
 });
