@@ -100,6 +100,16 @@ add_action('wp_ajax_bs_save_settings',function(){
         if(isset($_POST[$f])) update_option($f, sanitize_text_field($_POST[$f]));
     }
 
+    // URL fields. esc_url_raw rather than sanitize_text_field so query
+    // strings, fragments and protocols survive intact. Empty value clears
+    // the option, restoring the home_url() fallback inside bs_track_url().
+    $url_fields = [
+        'bookshop_track_page_url',
+    ];
+    foreach($url_fields as $f){
+        if(isset($_POST[$f])) update_option($f, esc_url_raw(trim((string)$_POST[$f])));
+    }
+
     // Secret keys — sanitize but preserve full string (no stripping of special chars)
     $secret_fields = [
         'bookshop_paystack_secret_key',

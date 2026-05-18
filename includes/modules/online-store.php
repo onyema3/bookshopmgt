@@ -226,9 +226,22 @@ function bs_notify_online_order_status_change($order_id,$status,$prev_status='')
                 <td style='color:#8a7a65;font-size:.85em'>Type</td>
                 <td style='text-align:right;color:#8a7a65;font-size:.85em'>".esc_html(ucfirst($order->type))."</td>
             </tr>
-        </table>
+        </table>";
 
-        <p style='margin-top:22px;color:#8a7a65;font-size:.82em'>Thank you for shopping with us! — $shop</p>
+    // Optional "Track this order" CTA. We render it whenever the
+    // bs_track_url() helper is available — which it is as long as
+    // frontend/shortcodes.php has loaded. Falls back to a plain home_url
+    // with the params on the query string, so the email stays useful even
+    // when the shop hasn't named a tracking page yet.
+    if(function_exists('bs_track_url')){
+        $track = bs_track_url($order->ref, $order->customer_email);
+        $html .= "<div style='margin-top:18px;text-align:center'>
+            <a href='".esc_url($track)."' style='display:inline-block;padding:11px 22px;background:#1a1208;color:#f5d87a;text-decoration:none;border-radius:8px;font-weight:600;font-size:.9em;letter-spacing:.02em'>Track this order online &rarr;</a>
+        </div>";
+    }
+
+    $html .= "
+        <p style='margin-top:22px;color:#8a7a65;font-size:.82em'>Thank you for shopping with us! &mdash; $shop</p>
     </div>";
 
     return wp_mail(

@@ -307,6 +307,18 @@ function bs_page_settings(){
             </div>
             <?php endif; ?>
             <div class="bs-form-group bs-span2">
+                <label>Order tracking page URL</label>
+                <input type="url" name="bookshop_track_page_url" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_track_page_url',''))?>"
+                    placeholder="https://example.com/track-order/">
+                <small style="color:var(--muted);font-size:.75rem">
+                    URL of the page hosting the <code>[bookshop_track]</code> shortcode. Used in
+                    status emails so customers can self-serve their order status. Leave blank to
+                    fall back to your home page (the shortcode picks up the params from the URL
+                    wherever it's placed).
+                </small>
+            </div>
+            <div class="bs-form-group bs-span2">
                 <label>POS IP Whitelist (one IP per line, CIDR supported, empty = allow all)</label>
                 <textarea name="bookshop_ip_whitelist" class="bs-input bs-setting" rows="3"
                     placeholder="e.g.&#10;192.168.1.0/24&#10;41.58.100.5"><?=esc_textarea(get_option('bookshop_ip_whitelist',''))?></textarea>
@@ -342,6 +354,7 @@ function bs_page_settings(){
             <div><code style="background:#f5efe4;padding:4px 10px;border-radius:5px">[bookshop_portal]</code> — Customer account portal (login, orders, points, reservations)</div>
             <div><code style="background:#f5efe4;padding:4px 10px;border-radius:5px">[bookshop_catalogue]</code> — Full online book catalogue with cart &amp; checkout</div>
             <div><code style="background:#f5efe4;padding:4px 10px;border-radius:5px">[bookshop_catalogue genre="Fiction" limit="12"]</code> — Filtered catalogue</div>
+            <div><code style="background:#f5efe4;padding:4px 10px;border-radius:5px">[bookshop_track]</code> — Customer order tracking (ref + email lookup, no login)</div>
         </div>
     </div>
     </div>
