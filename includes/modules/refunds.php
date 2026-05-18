@@ -92,7 +92,7 @@ add_action('wp_ajax_bs_create_refund',function(){
     isset($res['error'])?wp_send_json_error($res['error']):wp_send_json_success($res);
 });
 add_action('wp_ajax_bs_get_refunds',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $items=bs_get_refunds(intval($_GET['sale_id']??0));
     wp_send_json_success($items);
 });

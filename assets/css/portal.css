@@ -96,5 +96,8 @@
 .bsp-reserv-notes{font-size:.78rem;color:var(--bs-muted);margin-top:4px;font-style:italic}
 
 /* ── Profile ─────────────────────────────────── */
-.bsp-profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.bsp-profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;margin-bottom:14px;align-items:start}
+.bsp-profile-grid .bsp-field{margin-bottom:0}
+.bsp-profile-grid .bsp-input{height:42px;line-height:1.2}
+.bsp-profile-grid textarea.bsp-input{height:auto;min-height:64px}
 @media(max-width:500px){.bsp-profile-grid{grid-template-columns:1fr}}

@@ -3,9 +3,13 @@ if(!defined('ABSPATH'))exit;
 
 add_action('template_redirect',function(){
     if(empty($_GET['bookshop_pos'])) return;
-    if(!is_user_logged_in()){ auth_redirect(); exit; }
-    if(!bs_user_can_pos()){ wp_die('You do not have permission to use the POS.','Access Denied',['response'=>403]); }
-    bs_render_pos(); exit;
+    // If logged in but cannot use POS, deny.
+    if(is_user_logged_in() && !bs_user_can_pos()){
+        wp_die('You do not have permission to use the POS.','Access Denied',['response'=>403]);
+    }
+    // Render POS — for not-logged-in users, the PIN screen is rendered inside.
+    bs_render_pos();
+    exit;
 });
 
 function bs_render_pos(){
@@ -160,6 +164,8 @@ body{font-family:var(--fb);background:var(--paper);color:var(--ink);height:100vh
 .pin-key{width:72px;height:72px;background:#1e1e1e;border:1px solid #333;color:#fff;border-radius:12px;font-size:1.4rem;cursor:pointer;font-family:var(--fb);transition:.15s;display:flex;align-items:center;justify-content:center}
 .pin-key:hover{background:#2a2a2a;border-color:var(--amber)}
 .pin-key.del{font-size:1rem;color:#aaa}
+.pin-key.ok{background:var(--amber-d);color:#fff;font-weight:700;font-size:1rem}
+.pin-key.ok:hover{background:var(--amber);color:var(--ink)}
 .pin-error{color:#e57373;font-size:.85rem;min-height:20px}
 .pin-alt{color:#aaa;font-size:.8rem;cursor:pointer;text-decoration:underline;margin-top:6px}
 
@@ -192,15 +198,21 @@ if(!is_user_logged_in()): ?>
     <h2>📚 <?=esc_html($shop)?></h2>
     <p style="color:#aaa">Enter your PIN to sign in</p>
     <div class="pin-display" id="pin-display">
-        <?php for($i=0;$i<4;$i++) echo '<div class="pin-dot" id="pd-'.$i.'"></div>'; ?>
+        <?php for($i=0;$i<8;$i++) echo '<div class="pin-dot" id="pd-'.$i.'" data-idx="'.$i.'" style="display:'.($i<4?'block':'none').'"></div>'; ?>
     </div>
     <div class="pin-pad">
-        <?php foreach([1,2,3,4,5,6,7,8,9,'',0,'&#9003;'] as $k):
-            $pk_extra = ($k === '') ? 'style="visibility:hidden"' : '';
-            $pk_label = ($k === '') ? '' : htmlspecialchars((string)$k, ENT_QUOTES);
-            $pk_val   = htmlspecialchars((string)$k, ENT_QUOTES);
+        <?php
+        $keys = [1,2,3,4,5,6,7,8,9,'OK',0,'&#9003;'];
+        foreach($keys as $k):
+            $is_ok = ($k === 'OK');
+            $is_del = ($k === '&#9003;');
+            $pk_label = ($k === '') ? '' : (string)$k;
+            $pk_val   = $is_ok ? 'OK' : ($is_del ? 'Del' : (string)$k);
+            $pk_class = 'pin-key';
+            if($is_ok)  $pk_class .= ' ok';
+            if($is_del) $pk_class .= ' del';
         ?>
-        <button class="pin-key" <?=$pk_extra?> onclick="pinKey('<?=$pk_val?>')"><?=$pk_label?></button>
+        <button class="<?=$pk_class?>" onclick="pinKey('<?=esc_attr($pk_val)?>')"><?=$pk_label?></button>
         <?php endforeach; ?>
     </div>
     <div class="pin-error" id="pin-error"></div>
@@ -495,25 +507,44 @@ let currentTotal=0;
 
 // ── PIN login (if needed) ──────────────────────────────────
 let pinVal='';
+let pinSubmitting=false;
 window.pinKey=function(k){
+    if(pinSubmitting) return;
     if(k==='Del'){pinVal=pinVal.slice(0,-1);}
+    else if(k==='OK'){if(pinVal.length>=4) attemptPinLogin(); return;}
     else if(pinVal.length<8) pinVal+=k;
     updatePinDots();
-    if(pinVal.length>=4) attemptPinLogin();
+    // Auto-submit at 4 digits for the common 4-digit PIN. Longer PIN holders
+    // can keep entering and press OK explicitly (they will still hit auto-submit
+    // at 4, so for longer PINs press Del once to keep typing — or just press OK).
+    if(pinVal.length===4) attemptPinLogin();
 };
 function updatePinDots(){
-    document.querySelectorAll('.pin-dot').forEach((d,i)=>d.classList.toggle('filled',i<pinVal.length));
+    const dots=document.querySelectorAll('.pin-dot');
+    const showCount=Math.max(4,Math.min(8,pinVal.length||4));
+    dots.forEach((d,i)=>{
+        d.style.display = (i<showCount) ? 'block' : 'none';
+        d.classList.toggle('filled', i<pinVal.length);
+    });
 }
 function attemptPinLogin(){
-    if(pinVal.length<4) return;
+    if(pinVal.length<4||pinSubmitting) return;
+    pinSubmitting=true;
+    document.getElementById('pin-error').textContent='';
     post({action:'bs_pin_login',pin:pinVal}).then(d=>{
-        if(d.success){
-            document.getElementById('pin-screen')?.remove();
-            document.getElementById('pos-staff-name').textContent=d.data.name;
+        pinSubmitting=false;
+        if(d&&d.success){
+            // Reload so PHP renders POS in fully-authenticated context
+            // (current user, shift, capabilities, etc.).
+            window.location.reload();
         } else {
-            document.getElementById('pin-error').textContent='Incorrect PIN';
+            document.getElementById('pin-error').textContent=(d&&d.data)?d.data:'Incorrect PIN';
             setTimeout(()=>{pinVal='';updatePinDots();document.getElementById('pin-error').textContent='';},1200);
         }
+    }).catch(()=>{
+        pinSubmitting=false;
+        document.getElementById('pin-error').textContent='Network error — try again';
+        setTimeout(()=>{pinVal='';updatePinDots();},1200);
     });
 }
 

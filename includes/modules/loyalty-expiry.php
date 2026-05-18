@@ -42,7 +42,7 @@ function bs_expire_loyalty_points(){
 add_action('bookshop_daily_tasks','bs_expire_loyalty_points');
 
 add_action('wp_ajax_bs_run_loyalty_expiry',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized');
     $count=bs_expire_loyalty_points();
     wp_send_json_success(['expired'=>$count,'message'=>"Expired points for $count customers"]);
 });

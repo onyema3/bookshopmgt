@@ -61,7 +61,7 @@ function bs_get_message_log($args=[]){
 
 // ── AJAX: Send bulk email ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_send_bulk_email',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $ids  =json_decode(stripslashes($_POST['customer_ids']??'[]'),true);
     $subj =sanitize_text_field($_POST['subject']??'');
     $body =sanitize_textarea_field($_POST['body']??'');
@@ -72,7 +72,7 @@ add_action('wp_ajax_bs_send_bulk_email',function(){
 
 // ── AJAX: Get WhatsApp links ──────────────────────────────────────────────────
 add_action('wp_ajax_bs_get_whatsapp_links',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $ids =json_decode(stripslashes($_POST['customer_ids']??'[]'),true);
     $msg =sanitize_textarea_field($_POST['message']??'');
     if(empty($ids)||!$msg) wp_send_json_error('Missing fields');
@@ -82,7 +82,7 @@ add_action('wp_ajax_bs_get_whatsapp_links',function(){
 
 // ── AJAX: Get customer segments ───────────────────────────────────────────────
 add_action('wp_ajax_bs_get_customer_segment',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $genre=sanitize_text_field($_GET['genre']??'');
     $days =intval($_GET['days']??180);
     $spend=floatval($_GET['min_spend']??0);

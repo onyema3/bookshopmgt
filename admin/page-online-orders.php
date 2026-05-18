@@ -42,7 +42,7 @@ function bs_page_online_orders(){
             <td><strong><?=bs_fmt($o->total)?></strong></td>
             <td><?=$o->payment_gateway?'<span class="bs-badge bs-badge-active">'.esc_html($o->payment_gateway).'</span>':'<span class="bs-badge bs-badge-inactive">None</span>'?></td>
             <td>
-                <select class="bs-order-status-select bs-select-xs" data-id="<?=esc_attr($o->id)?>" onchange="bsUpdateOrderStatus(this)">
+                <select class="bs-order-status-select bs-select-xs" data-id="<?=esc_attr($o->id)?>" data-prev="<?=esc_attr($o->status)?>" onchange="bsUpdateOrderStatus(this)">
                     <?php foreach($statuses as $s) echo "<option value='$s'".selected($o->status,$s,false).">$s</option>"; ?>
                 </select>
             </td>
@@ -125,7 +125,30 @@ function bs_page_online_orders(){
 
     <script>
     function bsUpdateOrderStatus(sel){
-        jQuery.post(BSAdmin.ajax_url,{action:'bs_update_online_order_status',id:jQuery(sel).data('id'),status:jQuery(sel).val(),nonce:BSAdmin.nonce});
+        var $sel=jQuery(sel);
+        var prev=$sel.data('prev')||$sel.find('option:not(:selected)').first().val();
+        $sel.prop('disabled',true);
+        jQuery.post(BSAdmin.ajax_url,{
+            action:'bs_update_online_order_status',
+            id:$sel.data('id'),
+            status:$sel.val(),
+            nonce:BSAdmin.nonce
+        }).done(function(res){
+            $sel.prop('disabled',false);
+            if(res && res.success){
+                $sel.data('prev',$sel.val());
+                // Brief flash to confirm
+                $sel.css({'transition':'background .3s','background':'#d4edda'});
+                setTimeout(function(){$sel.css('background','');},700);
+            } else {
+                alert('Update failed: '+((res&&res.data)?res.data:'Unknown error'));
+                $sel.val(prev);
+            }
+        }).fail(function(xhr){
+            $sel.prop('disabled',false);
+            alert('Request failed ('+xhr.status+'). Please try again.');
+            $sel.val(prev);
+        });
     }
     </script>
 <?php

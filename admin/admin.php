@@ -2,18 +2,23 @@
 if(!defined('ABSPATH'))exit;
 
 add_action('admin_menu',function(){
-    add_menu_page('Bookshop','Bookshop','manage_options','bookshop','bs_page_books','dashicons-book-alt',25);
-    add_submenu_page('bookshop','Books','📚 Books','manage_options','bookshop','bs_page_books');
-    add_submenu_page('bookshop','Sales','💳 Sales','manage_options','bookshop-sales','bs_page_sales');
-    add_submenu_page('bookshop','Customers','👥 Customers','manage_options','bookshop-customers','bs_page_customers');
-    add_submenu_page('bookshop','Suppliers','🚚 Suppliers','manage_options','bookshop-suppliers','bs_page_suppliers');
-    add_submenu_page('bookshop','Promotions','🏷️ Promotions','manage_options','bookshop-promotions','bs_page_promotions');
-    add_submenu_page('bookshop','Branches','🏪 Branches','manage_options','bookshop-branches','bs_page_branches');
-    add_submenu_page('bookshop','Messaging','📣 Messaging','manage_options','bookshop-messaging','bs_page_messaging');
-    add_submenu_page('bookshop','Online Orders','🛒 Online & API','manage_options','bookshop-online','bs_page_online_orders');
-    add_submenu_page('bookshop','Reports','📊 Reports','manage_options','bookshop-reports','bs_page_reports');
-    add_submenu_page('bookshop','Staff','👤 Staff','manage_options','bookshop-staff','bs_page_staff');
-    add_submenu_page('bookshop','Settings','⚙️ Settings','manage_options','bookshop-settings','bs_page_settings');
+    // Use 'bookshop_manager' capability so both administrators (granted on activation)
+    // and the Bookshop Manager role can access these pages. Settings remains admin-only.
+    $cap_mgr = 'bookshop_manager';
+    $cap_admin = 'manage_options';
+    add_menu_page('Bookshop','Bookshop',$cap_mgr,'bookshop','bs_page_books','dashicons-book-alt',25);
+    add_submenu_page('bookshop','Books','📚 Books',$cap_mgr,'bookshop','bs_page_books');
+    add_submenu_page('bookshop','Sales','💳 Sales',$cap_mgr,'bookshop-sales','bs_page_sales');
+    add_submenu_page('bookshop','Customers','👥 Customers',$cap_mgr,'bookshop-customers','bs_page_customers');
+    add_submenu_page('bookshop','Suppliers','🚚 Suppliers',$cap_mgr,'bookshop-suppliers','bs_page_suppliers');
+    add_submenu_page('bookshop','Promotions','🏷️ Promotions',$cap_mgr,'bookshop-promotions','bs_page_promotions');
+    add_submenu_page('bookshop','Branches','🏪 Branches',$cap_mgr,'bookshop-branches','bs_page_branches');
+    add_submenu_page('bookshop','Messaging','📣 Messaging',$cap_mgr,'bookshop-messaging','bs_page_messaging');
+    add_submenu_page('bookshop','Online Orders','🛒 Online & API',$cap_mgr,'bookshop-online','bs_page_online_orders');
+    add_submenu_page('bookshop','Reports','📊 Reports',$cap_mgr,'bookshop-reports','bs_page_reports');
+    add_submenu_page('bookshop','Staff','👤 Staff',$cap_mgr,'bookshop-staff','bs_page_staff');
+    // Settings is sensitive (API keys, payment secrets) — keep admin-only
+    add_submenu_page('bookshop','Settings','⚙️ Settings',$cap_admin,'bookshop-settings','bs_page_settings');
     add_submenu_page('bookshop','Open POS','🖥️ Open POS','bookshop_pos','bookshop-pos-link','bs_pos_redirect');
 });
 

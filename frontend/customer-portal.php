@@ -247,10 +247,10 @@ function bs_render_portal_dashboard($customer){
             <div class="bsp-card">
                 <h4 style="font-family:'Playfair Display',serif;margin-bottom:14px">My Information</h4>
                 <div class="bsp-profile-grid">
-                    <div class="bsp-field"><label>Full Name</label><input type="text" id="bsp-p-name" class="bsp-input" value="<?=esc_attr($customer->name)?>"></div>
-                    <div class="bsp-field"><label>Phone</label><input type="text" id="bsp-p-phone" class="bsp-input" value="<?=esc_attr($customer->phone)?>"></div>
+                    <div class="bsp-field bsp-span2"><label>Full Name</label><input type="text" id="bsp-p-name" class="bsp-input" value="<?=esc_attr($customer->name)?>"></div>
+                    <div class="bsp-field"><label>Phone</label><input type="tel" id="bsp-p-phone" class="bsp-input" value="<?=esc_attr($customer->phone)?>"></div>
                     <div class="bsp-field"><label>Email</label><input type="email" id="bsp-p-email" class="bsp-input" value="<?=esc_attr($customer->email)?>"></div>
-                    <div class="bsp-field"><label>Birthday</label><input type="date" id="bsp-p-birthday" class="bsp-input" value="<?=esc_attr($customer->birthday)?>"></div>
+                    <div class="bsp-field bsp-span2"><label>Birthday</label><input type="date" id="bsp-p-birthday" class="bsp-input" value="<?=esc_attr($customer->birthday)?>"></div>
                     <div class="bsp-field bsp-span2"><label>Address</label><textarea id="bsp-p-address" class="bsp-input" rows="2"><?=esc_textarea($customer->address)?></textarea></div>
                 </div>
                 <button class="bsp-btn bsp-btn-primary" id="bsp-save-profile">Save Changes</button>

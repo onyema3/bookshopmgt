@@ -34,6 +34,12 @@ add_action('rest_api_init',function(){
     register_rest_route($ns,'/webhooks',['methods'=>'GET','callback'=>'bs_api_get_webhooks','permission_callback'=>'bs_api_admin_auth']);
     register_rest_route($ns,'/webhooks',['methods'=>'POST','callback'=>'bs_api_save_webhook','permission_callback'=>'bs_api_admin_auth']);
     register_rest_route($ns,'/webhooks/(?P<id>\d+)',['methods'=>'DELETE','callback'=>'bs_api_delete_webhook','permission_callback'=>'bs_api_admin_auth']);
+
+    // ── Online Orders ───────────────────────────────────────────────────────────
+    register_rest_route($ns,'/online-orders',['methods'=>'GET','callback'=>'bs_api_get_online_orders','permission_callback'=>'bs_api_admin_auth']);
+    register_rest_route($ns,'/online-orders/(?P<id>\d+)',['methods'=>'GET','callback'=>'bs_api_get_online_order','permission_callback'=>'bs_api_admin_auth']);
+    register_rest_route($ns,'/online-orders/(?P<id>\d+)',['methods'=>'PATCH','callback'=>'bs_api_update_online_order','permission_callback'=>'bs_api_admin_auth']);
+    register_rest_route($ns,'/online-orders/(?P<id>\d+)/payment',['methods'=>'POST','callback'=>'bs_api_record_online_order_payment','permission_callback'=>'bs_api_admin_auth']);
 });
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
@@ -145,3 +151,69 @@ add_action('bs_after_stock_change',function($book_id){
     $book=bs_get_book($book_id);
     if($book&&$book->stock_qty<=$book->low_stock_threshold) bs_fire_webhooks('stock.low',(array)$book);
 });
+
+
+// ── Online-order endpoint handlers ─────────────────────────────────────────────
+function bs_api_get_online_orders($req){
+    $args=[
+        'status'=>sanitize_text_field($req->get_param('status')??''),
+        'limit' =>min(200,max(1,intval($req->get_param('limit')??50))),
+        'offset'=>max(0,intval($req->get_param('offset')??0)),
+    ];
+    return rest_ensure_response(bs_get_online_orders($args));
+}
+
+function bs_api_get_online_order($req){
+    global $wpdb;
+    $id=intval($req['id']);
+    $row=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$id));
+    if(!$row) return new WP_Error('not_found','Online order not found',['status'=>404]);
+    $row->items=json_decode($row->items_data,true);
+    return rest_ensure_response($row);
+}
+
+function bs_api_update_online_order($req){
+    $id=intval($req['id']);
+    $params=$req->get_json_params();
+    if(!is_array($params)) $params=$req->get_params();
+    $status=isset($params['status'])?sanitize_text_field($params['status']):'';
+    if(!$status){
+        return new WP_Error('missing_status','status field required',['status'=>400]);
+    }
+    $res=bs_update_online_order_status($id,$status);
+    if(is_array($res) && isset($res['error'])){
+        return new WP_Error('update_failed',$res['error'],['status'=>400]);
+    }
+    return rest_ensure_response($res);
+}
+
+function bs_api_record_online_order_payment($req){
+    global $wpdb;
+    $id=intval($req['id']);
+    $params=$req->get_json_params();
+    if(!is_array($params)) $params=$req->get_params();
+    $payment_ref    =sanitize_text_field($params['payment_ref']??'');
+    $payment_amount =isset($params['payment_amount'])?floatval($params['payment_amount']):null;
+    $payment_gateway=sanitize_text_field($params['payment_gateway']??'manual');
+    $mark_completed =!empty($params['complete']);
+    if(!$payment_ref){
+        return new WP_Error('missing_ref','payment_ref required',['status'=>400]);
+    }
+    $order=$wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$id));
+    if(!$order) return new WP_Error('not_found','Online order not found',['status'=>404]);
+    // Idempotency: if same payment_ref already recorded, just return current state.
+    if($order->payment_ref===$payment_ref){
+        return rest_ensure_response(['ok'=>true,'no_change'=>true,'order_id'=>$id]);
+    }
+    $wpdb->update("{$wpdb->prefix}bookshop_online_orders",[
+        'status'         =>'paid',
+        'payment_ref'    =>$payment_ref,
+        'payment_amount' =>$payment_amount===null?$order->total:$payment_amount,
+        'payment_gateway'=>$payment_gateway,
+    ],['id'=>$id]);
+    bs_audit('online_payment','payment',$id,"$payment_gateway online_order payment via API: $payment_ref");
+    if($mark_completed){
+        bs_update_online_order_status($id,'completed');
+    }
+    return rest_ensure_response(['ok'=>true,'order_id'=>$id,'status'=>$mark_completed?'completed':'paid']);
+}

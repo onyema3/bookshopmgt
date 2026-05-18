@@ -65,7 +65,7 @@ add_action('wp_ajax_bs_get_bundles',function(){
     wp_send_json_success(bs_get_bundles());
 });
 add_action('wp_ajax_bs_save_bundle',function(){
-    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $id=intval($_POST['id']??0);
     $data=array_merge($_POST,['book_ids'=>json_decode(stripslashes($_POST['book_ids']??'[]'),true)]);
     wp_send_json_success(['id'=>bs_save_bundle($data,$id)]);
