@@ -123,13 +123,13 @@ body{font-family:var(--fb);background:var(--paper);color:var(--ink);height:100vh
 .checkout-btn:disabled{background:#ccc;color:#999;cursor:not-allowed}
 
 /* Modals */
-.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999}
-.modal-box{background:#fff;border-radius:12px;max-width:480px;width:92%;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden}
-.modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--warm)}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;overflow-y:auto;padding:20px 0}
+.modal-box{background:#fff;border-radius:12px;max-width:480px;width:92%;max-height:92vh;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden;display:flex;flex-direction:column}
+.modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--warm);flex-shrink:0}
 .modal-hdr h3{font-family:var(--fh);font-size:1.1rem}
 .modal-close{background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--muted)}
-.modal-body{padding:20px}
-.modal-foot{padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px}
+.modal-body{padding:20px;overflow-y:auto;flex:1;min-height:0}
+.modal-foot{padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0}
 .m-btn{padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-family:var(--fb);font-weight:600;font-size:.88rem}
 .m-btn-sec{background:var(--warm);border:1.5px solid var(--border)!important}
 .m-btn-pri{background:var(--ink);color:var(--amber-l)}
@@ -397,9 +397,9 @@ if(!is_user_logged_in()): ?>
             <h3>OK Sale Complete</h3>
             <button class="modal-close" onclick="newSale()">✕</button>
         </div>
-        <div class="modal-body" style="padding:0">
+        <div class="modal-body" style="padding:0;display:flex;flex-direction:column">
             <!-- Printable receipt -->
-            <div id="printable-receipt" style="padding:20px">
+            <div id="printable-receipt" style="padding:20px;overflow-y:auto;flex:1;min-height:0">
                 <?php if($logo=get_option('bookshop_logo_url','')): ?>
                 <div style="text-align:center;margin-bottom:10px">
                     <img src="<?=esc_url($logo)?>" style="max-height:60px;max-width:180px" alt="logo">
@@ -448,7 +448,7 @@ if(!is_user_logged_in()): ?>
             </div>
 
             <!-- Action buttons (hidden on print) -->
-            <div class="no-print" style="padding:12px 20px;border-top:1px solid var(--border);background:var(--warm)">
+            <div class="no-print" style="padding:12px 20px;border-top:1px solid var(--border);background:var(--warm);flex-shrink:0">
                 <div style="display:flex;gap:6px;margin-bottom:8px">
                     <input type="email" id="r-email" placeholder="Email receipt to customer..."
                         style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:.82rem;font-family:var(--fb)">
