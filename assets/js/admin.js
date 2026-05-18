@@ -330,11 +330,70 @@ function clearBookForm(){
     $('#bs-f-status').val('active');
     $('#bs-f-threshold').val(5);
     $('#bs-margin-preview').hide();
+    // Reset per-branch panel
+    $('#bs-f-branch-stock-wrap').hide();
+    $('#bs-f-branch-stock-list').html('<div style="color:var(--muted);font-size:.82rem">Loading branches…</div>');
+    $('#bs-f-branch-stock-total').text('');
+    $('#bs-f-stock-label').text('Stock Qty');
+    $('#bs-f-stock').prop('readonly',false).css('background','');
+}
+
+// Load this user's allowed branches (with current per-branch qty for the
+// given book id, or zeros for a brand-new book) and render the editable
+// rows inside the modal. When no branches are returned (single-shop setup
+// or non-admin without a branch), the whole panel stays hidden so the
+// classic global Stock Qty input is the only one shown.
+function loadBookBranches(bookId){
+    var $list  = $('#bs-f-branch-stock-list');
+    var $wrap  = $('#bs-f-branch-stock-wrap');
+    var $total = $('#bs-f-branch-stock-total');
+    $list.html('<div style="color:var(--muted);font-size:.82rem">Loading branches…</div>');
+    get({action:'bs_get_book_branches', book_id: bookId||0}).then(function(res){
+        if(!res || !res.success || !res.data || !res.data.branches || res.data.branches.length===0){
+            $wrap.hide();
+            return;
+        }
+        var rows = res.data.branches.map(function(b){
+            return ''
+                + '<div class="bs-bf-row" style="display:flex;align-items:center;gap:10px">'
+                +   '<label style="flex:1;font-weight:500;font-size:.88rem;color:var(--ink);margin:0">'+escapeHtml(b.name)+'</label>'
+                +   '<input type="number" min="0" class="bs-input bs-bf-qty" '
+                +     'data-branch-id="'+b.id+'" value="'+parseInt(b.qty,10)+'" '
+                +     'style="width:90px;padding:6px 8px;font-size:.88rem">'
+                + '</div>';
+        }).join('');
+        $list.html(rows);
+        $wrap.show();
+        // The global Stock Qty becomes a derived sum once per-branch entry
+        // is in play. Lock it down so a manager doesn't type a number into
+        // both fields and then wonder why the branch values won.
+        $('#bs-f-stock-label').text('Stock Qty (auto from branches)');
+        $('#bs-f-stock').prop('readonly',true).css('background','#f5efe4');
+        recalcBranchStockTotal();
+    });
+}
+
+function recalcBranchStockTotal(){
+    var sum = 0;
+    $('#bs-f-branch-stock-list .bs-bf-qty').each(function(){
+        sum += Math.max(0, parseInt($(this).val(),10) || 0);
+    });
+    $('#bs-f-branch-stock-total').text('Total across branches: '+sum);
+    $('#bs-f-stock').val(sum);
+}
+$(document).on('input','.bs-bf-qty',recalcBranchStockTotal);
+
+// Tiny HTML escaper for branch names that might contain quotes/&/<.
+function escapeHtml(str){
+    return String(str==null?'':str)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 $(document).on('click','#bs-add-book',function(){
     clearBookForm();
     $('#bs-modal-title').text('Add New Book');
     openModal('#bs-book-modal');
+    loadBookBranches(0);
 });
 $(document).on('click','.bs-edit-book',function(){
     get({action:'bs_get_book',id:$(this).data('id')}).then(res=>{
@@ -349,35 +408,46 @@ $(document).on('click','.bs-edit-book',function(){
         $('#bs-f-status').val(b.status);
         $('#bs-modal-title').text('Edit Book');openModal('#bs-book-modal');
         updateMarginPreview();
+        loadBookBranches(b.id);
     });
 });
 $(document).on('click','#bs-save-book',function(){
     const title=$('#bs-f-title').val().trim();
     if(!title){alert('Title is required before saving.');return;}
     const btn=$(this).prop('disabled',true).text('Saving…');
+    const payload = {
+        action:       'bs_save_book',
+        id:           $('#bs-book-id').val()||0,
+        title:        title,
+        author:       $('#bs-f-author').val(),
+        isbn:         $('#bs-f-isbn').val(),
+        genre:        $('#bs-f-genre').val(),
+        publisher:    $('#bs-f-publisher').val(),
+        publish_year: $('#bs-f-year').val(),
+        cost_price:   $('#bs-f-cost').val()||0,
+        sell_price:   $('#bs-f-price').val()||0,
+        stock_qty:    $('#bs-f-stock').val()||0,
+        low_stock_threshold: $('#bs-f-threshold').val()||5,
+        location:     $('#bs-f-location').val(),
+        barcode:      $('#bs-f-barcode').val(),
+        cover_url:    $('#bs-f-cover').val(),
+        description:  $('#bs-f-desc').val(),
+        status:       $('#bs-f-status').val()||'active',
+    };
+    // Append branch_stock[branch_id]=qty for any rendered per-branch inputs.
+    // jQuery serializes a flat key like 'branch_stock[3]' verbatim, which is
+    // exactly what PHP's $_POST['branch_stock'] expects (an associative
+    // array keyed by branch id).
+    $('#bs-f-branch-stock-list .bs-bf-qty').each(function(){
+        var bid = parseInt($(this).data('branch-id'),10) || 0;
+        if(!bid) return;
+        payload['branch_stock['+bid+']'] = Math.max(0, parseInt($(this).val(),10) || 0);
+    });
     $.ajax({
         url: ajax_url,
         method: 'POST',
         timeout: 15000,
-        data: {
-            action:       'bs_save_book',
-            id:           $('#bs-book-id').val()||0,
-            title:        title,
-            author:       $('#bs-f-author').val(),
-            isbn:         $('#bs-f-isbn').val(),
-            genre:        $('#bs-f-genre').val(),
-            publisher:    $('#bs-f-publisher').val(),
-            publish_year: $('#bs-f-year').val(),
-            cost_price:   $('#bs-f-cost').val()||0,
-            sell_price:   $('#bs-f-price').val()||0,
-            stock_qty:    $('#bs-f-stock').val()||0,
-            low_stock_threshold: $('#bs-f-threshold').val()||5,
-            location:     $('#bs-f-location').val(),
-            barcode:      $('#bs-f-barcode').val(),
-            cover_url:    $('#bs-f-cover').val(),
-            description:  $('#bs-f-desc').val(),
-            status:       $('#bs-f-status').val()||'active',
-        }
+        data: payload
     }).done(function(res){
         btn.prop('disabled',false).text('Save Book');
         if(res && res.success){

@@ -67,8 +67,84 @@ add_action('wp_ajax_bs_save_book', function() {
         return;
     }
 
+    // ── Per-branch stock (optional payload) ──────────────────────────────
+    // The Add/Edit Book modal can post `branch_stock[branch_id]=qty` for any
+    // branches the current user is allowed to operate from. We deliberately
+    // gate the write with bs_user_branches() so a manager pinned to one
+    // location can't overwrite another branch's count by editing the form
+    // payload. CSV / REST / Woo importers don't post this key, so they're
+    // unaffected.
+    if ( isset($_POST['branch_stock']) && is_array($_POST['branch_stock']) ) {
+        $allowed = function_exists('bs_user_branches') ? bs_user_branches() : [];
+        $allowed_ids = array_map(function($b){ return intval($b->id); }, $allowed);
+        $touched = false;
+        foreach ( $_POST['branch_stock'] as $branch_id => $qty ) {
+            $branch_id = intval($branch_id);
+            if ( !$branch_id || !in_array($branch_id, $allowed_ids, true) ) continue;
+            $qty = max(0, intval($qty));
+            bs_set_branch_stock($branch_id, $res, $qty);
+            $touched = true;
+        }
+        // Once any per-branch row exists for this book, re-derive the global
+        // stock_qty from the branch sum so the unscoped listing and any
+        // legacy reports that still read bookshop_books.stock_qty stay in
+        // sync. We only do this when the book actually has branch rows —
+        // shops that haven't started using branches keep the manual qty
+        // they typed in #bs-f-stock.
+        if ( $touched ) {
+            $sum = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(SUM(qty),0) FROM {$wpdb->prefix}bookshop_branch_stock WHERE book_id=%d",
+                $res));
+            if ( $sum !== null ) {
+                $wpdb->update(
+                    "{$wpdb->prefix}bookshop_books",
+                    ['stock_qty' => intval($sum)],
+                    ['id' => intval($res)]
+                );
+            }
+        }
+    }
+
     do_action('bs_after_stock_change', $res);
     wp_send_json_success(['id' => $res]);
+});
+
+// ── Admin: List branches + per-book qty for the Add/Edit Book modal ──────────
+// Returns only branches the current user is allowed to operate from
+// (bs_user_branches), so non-admin managers see — and can write to — only
+// their own branch. When book_id is 0/missing the qty is 0 for every row.
+add_action('wp_ajax_bs_get_book_branches', function() {
+    if ( !bs_user_can_manage() ) wp_send_json_error('Unauthorized', 403);
+    global $wpdb;
+    $book_id = intval( $_GET['book_id'] ?? 0 );
+
+    $allowed = function_exists('bs_user_branches') ? bs_user_branches() : [];
+    if ( empty($allowed) ) {
+        wp_send_json_success(['branches' => [], 'global' => 0]);
+        return;
+    }
+
+    $rows = [];
+    foreach ( $allowed as $b ) {
+        $qty = $book_id
+            ? intval($wpdb->get_var($wpdb->prepare(
+                "SELECT qty FROM {$wpdb->prefix}bookshop_branch_stock WHERE branch_id=%d AND book_id=%d",
+                intval($b->id), $book_id)))
+            : 0;
+        $rows[] = [
+            'id'   => intval($b->id),
+            'name' => $b->name,
+            'qty'  => $qty,
+        ];
+    }
+
+    $global = 0;
+    if ( $book_id ) {
+        $book = bs_get_book($book_id);
+        if ( $book ) $global = intval($book->stock_qty);
+    }
+
+    wp_send_json_success(['branches' => $rows, 'global' => $global]);
 });
 
 // ── Admin: Get single book ────────────────────────────────────────────────────
