@@ -343,7 +343,14 @@ function clearBookForm(){
 // rows inside the modal. When no branches are returned (single-shop setup
 // or non-admin without a branch), the whole panel stays hidden so the
 // classic global Stock Qty input is the only one shown.
-function loadBookBranches(bookId){
+//
+// `opts.focusActive` — when true (and there's an active branch in the
+// response), the input for that branch is focused. We only do this on
+// Add (not Edit), because stealing focus during an edit is rude — the
+// manager is usually about to change something else (price, threshold)
+// and a sudden caret jump to a stock field is disorienting.
+function loadBookBranches(bookId, opts){
+    opts = opts || {};
     var $list  = $('#bs-f-branch-stock-list');
     var $wrap  = $('#bs-f-branch-stock-wrap');
     var $total = $('#bs-f-branch-stock-total');
@@ -354,11 +361,26 @@ function loadBookBranches(bookId){
             return;
         }
         var rows = res.data.branches.map(function(b){
+            // Active pill: a small visual cue so the manager knows which
+            // branch the form is going to default to. The label still
+            // shows the full branch name — the pill is additive, not
+            // replacing.
+            var activeBadge = b.is_active
+                ? '<span class="bs-bf-active-pill" title="Your active branch — sales here decrement this row" '
+                +   'style="margin-left:6px;font-size:.7rem;font-weight:600;color:#5b3e0a;'
+                +   'background:#f5d87a;padding:1px 7px;border-radius:10px;letter-spacing:.02em">'
+                +   '🛍 Active</span>'
+                : '';
             return ''
-                + '<div class="bs-bf-row" style="display:flex;align-items:center;gap:10px">'
-                +   '<label style="flex:1;font-weight:500;font-size:.88rem;color:var(--ink);margin:0">'+escapeHtml(b.name)+'</label>'
+                + '<div class="bs-bf-row" data-active="'+(b.is_active?1:0)+'" '
+                +    'style="display:flex;align-items:center;gap:10px">'
+                +   '<label style="flex:1;font-weight:500;font-size:.88rem;color:var(--ink);margin:0">'
+                +     escapeHtml(b.name) + activeBadge
+                +   '</label>'
                 +   '<input type="number" min="0" class="bs-input bs-bf-qty" '
-                +     'data-branch-id="'+b.id+'" value="'+parseInt(b.qty,10)+'" '
+                +     'data-branch-id="'+b.id+'" '
+                +     'data-active="'+(b.is_active?1:0)+'" '
+                +     'value="'+parseInt(b.qty,10)+'" '
                 +     'style="width:90px;padding:6px 8px;font-size:.88rem">'
                 + '</div>';
         }).join('');
@@ -370,6 +392,20 @@ function loadBookBranches(bookId){
         $('#bs-f-stock-label').text('Stock Qty (auto from branches)');
         $('#bs-f-stock').prop('readonly',true).css('background','#f5efe4');
         recalcBranchStockTotal();
+
+        // Focus the active branch's input on Add. We do this in a setTimeout
+        // so it runs after the modal's own opening animation/focus
+        // settles — without it, the modal grabs focus back to its first
+        // element and our focus() is silently overridden.
+        if(opts.focusActive){
+            var activeId = parseInt(res.data.active_branch_id,10) || 0;
+            if(activeId){
+                setTimeout(function(){
+                    var $input = $('#bs-f-branch-stock-list .bs-bf-qty[data-branch-id="'+activeId+'"]');
+                    if($input.length){ $input.trigger('focus').trigger('select'); }
+                },120);
+            }
+        }
     });
 }
 
@@ -393,7 +429,10 @@ $(document).on('click','#bs-add-book',function(){
     clearBookForm();
     $('#bs-modal-title').text('Add New Book');
     openModal('#bs-book-modal');
-    loadBookBranches(0);
+    // Add path: focus the active branch's qty input so the cursor lands
+    // on the row the manager is most likely to be filling in. Edit path
+    // deliberately doesn't pass this — see loadBookBranches() for why.
+    loadBookBranches(0, {focusActive:true});
 });
 $(document).on('click','.bs-edit-book',function(){
     get({action:'bs_get_book',id:$(this).data('id')}).then(res=>{
