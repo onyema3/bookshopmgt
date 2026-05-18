@@ -173,8 +173,20 @@ add_action('wp_ajax_bs_add_credit',function(){
 // ── Branches ──────────────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_save_branch',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
-    $id=intval($_POST['id']??0);
-    wp_send_json_success(['id'=>bs_save_branch($_POST,$id)]);
+    $is_new   = empty($_POST['id']);
+    $id       = intval($_POST['id'] ?? 0);
+    $new_id   = bs_save_branch($_POST,$id);
+    $backfill = !empty($_POST['backfill']) ? sanitize_text_field($_POST['backfill']) : '';
+
+    // Backfill is only meaningful on the create path. Re-running it on edit
+    // would either duplicate-attempt-then-no-op (for 'copy' it's a safe
+    // INSERT IGNORE) or look like a no-op the manager can't make sense of,
+    // so we just ignore it on update.
+    $seeded = 0;
+    if($is_new && $new_id && in_array($backfill,['copy','zero'],true)){
+        $seeded = bs_backfill_branch_stock($new_id,$backfill);
+    }
+    wp_send_json_success(['id'=>$new_id,'backfilled'=>$seeded]);
 });
 add_action('wp_ajax_bs_get_branch',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
@@ -185,6 +197,47 @@ add_action('wp_ajax_bs_get_branch_stock',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $stock=bs_get_branch_stock(intval($_GET['id']??0));
     wp_send_json_success($stock);
+});
+
+// Stock breakdown for a single book across every branch the user is allowed
+// to view. Used by the "🏪 By branch" button on the admin Books listing.
+add_action('wp_ajax_bs_get_book_branch_breakdown',function(){
+    if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
+    global $wpdb;
+    $book_id = intval($_GET['book_id'] ?? 0);
+    if(!$book_id) wp_send_json_error('Missing book_id');
+
+    $book = bs_get_book($book_id);
+    if(!$book) wp_send_json_error('Book not found');
+
+    // Scope to the branches this user is permitted to see (admin → all,
+    // bookshop_manager → their home branch). Without this scoping a manager
+    // could call the endpoint directly and read every branch's stock.
+    $allowed = function_exists('bs_user_report_branches')
+        ? bs_user_report_branches() : bs_get_branches(true);
+    if(empty($allowed)) wp_send_json_success(['rows'=>[],'global'=>intval($book->stock_qty),'low'=>intval($book->low_stock_threshold)]);
+
+    $allowed_ids = array_map(function($b){ return intval($b->id); }, $allowed);
+    $placeholders = implode(',', array_fill(0, count($allowed_ids), '%d'));
+
+    $params = array_merge([$book_id], $allowed_ids);
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT br.id AS branch_id, br.name AS branch_name,
+                COALESCE(bst.qty, 0) AS qty
+         FROM {$wpdb->prefix}bookshop_branches br
+         LEFT JOIN {$wpdb->prefix}bookshop_branch_stock bst
+                ON bst.branch_id = br.id AND bst.book_id = %d
+         WHERE br.id IN ($placeholders)
+         ORDER BY br.name ASC",
+        $params
+    ));
+
+    wp_send_json_success([
+        'rows'   => $rows,
+        'global' => intval($book->stock_qty),
+        'low'    => intval($book->low_stock_threshold),
+        'title'  => $book->title,
+    ]);
 });
 add_action('wp_ajax_bs_transfer_stock',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);

@@ -4,15 +4,20 @@ if(!defined('ABSPATH'))exit;
 function bs_page_reports(){
     $from = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
     $to   = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
-    $branch_id = intval($_GET['branch'] ?? 0);
+    $requested_branch = intval($_GET['branch'] ?? 0);
 
-    // Build the branch picker once and validate the requested ID against the
-    // active branches list so a stale URL can't poison every query below.
-    $branches = function_exists('bs_get_branches') ? bs_get_branches(true) : [];
-    if ( $branch_id ) {
-        $valid = false;
-        foreach ( $branches as $b ) { if ( intval($b->id) === $branch_id ) { $valid = true; break; } }
-        if ( !$valid ) $branch_id = 0;
+    // Resolve which branches this user is allowed to view, and coerce the
+    // ?branch= param against that list. Non-admins with a home branch are
+    // pinned to it: an unscoped report would otherwise expose every branch's
+    // sales to a manager who's only meant to see their own location.
+    $branches  = function_exists('bs_user_report_branches') ? bs_user_report_branches() : [];
+    $branch_id = function_exists('bs_validate_report_branch')
+        ? bs_validate_report_branch($requested_branch)
+        : $requested_branch;
+    if ($branch_id === false) {
+        echo '<div class="wrap"><h1>📊 Reports & Analytics</h1>'
+           . '<div class="notice notice-error"><p>You don\'t have access to that branch.</p></div></div>';
+        return;
     }
     $branch_label = '';
     if ( $branch_id ) {
@@ -82,15 +87,19 @@ function bs_page_reports(){
         <label style="display:flex;align-items:center;gap:4px;font-size:.83rem">
             To <input type="date" name="to" value="<?=esc_attr($to)?>" class="bs-input-sm">
         </label>
-        <?php if(!empty($branches)): ?>
+        <?php if(count($branches) > 1): ?>
         <label style="display:flex;align-items:center;gap:4px;font-size:.83rem">
             🏪 <select name="branch" class="bs-input-sm" style="min-width:140px">
+                <?php if(function_exists('bs_user_is_admin') && bs_user_is_admin()): ?>
                 <option value="0">All branches</option>
+                <?php endif; ?>
                 <?php foreach($branches as $b): ?>
                 <option value="<?=intval($b->id)?>" <?=selected($branch_id,intval($b->id),false)?>><?=esc_html($b->name)?></option>
                 <?php endforeach; ?>
             </select>
         </label>
+        <?php elseif(count($branches) === 1 && $branch_id): ?>
+            <input type="hidden" name="branch" value="<?=intval($branch_id)?>">
         <?php endif; ?>
         <button class="bs-btn bs-btn-secondary">Apply</button>
     </form>

@@ -173,7 +173,10 @@ add_action('wp_ajax_bs_export_sales_csv', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from   = sanitize_text_field($_GET['from'] ?? '');
     $to     = sanitize_text_field($_GET['to']   ?? '');
-    $branch = intval($_GET['branch'] ?? 0);
+    // Coerce ?branch= against this user's allowed branches. A bookshop_manager
+    // pinned to one location can't dump another branch's sales by editing the URL.
+    $branch = bs_validate_report_branch( intval($_GET['branch'] ?? 0) );
+    if ( $branch === false ) wp_die('You do not have access to that branch.');
     $sales  = bs_get_sales(['from'=>$from,'to'=>$to,'branch_id'=>$branch,'limit'=>10000]);
     $suffix = $branch ? '-branch'.$branch : '';
     header('Content-Type: text/csv; charset=UTF-8');
@@ -200,7 +203,8 @@ add_action('wp_ajax_bs_export_sales_json', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from   = sanitize_text_field($_GET['from'] ?? '');
     $to     = sanitize_text_field($_GET['to']   ?? '');
-    $branch = intval($_GET['branch'] ?? 0);
+    $branch = bs_validate_report_branch( intval($_GET['branch'] ?? 0) );
+    if ( $branch === false ) wp_die('You do not have access to that branch.');
     $sales  = bs_get_sales(['from'=>$from,'to'=>$to,'branch_id'=>$branch,'limit'=>10000]);
     $out   = [];
     foreach ( $sales as $s ) {
@@ -235,7 +239,8 @@ add_action('wp_ajax_bs_export_sales_json', function() {
 // ── Export: Inventory CSV ─────────────────────────────────────────────────────
 add_action('wp_ajax_bs_export_inventory_csv', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
-    $branch = intval($_GET['branch'] ?? 0);
+    $branch = bs_validate_report_branch( intval($_GET['branch'] ?? 0) );
+    if ( $branch === false ) wp_die('You do not have access to that branch.');
     if ( $branch ) {
         // Per-branch listing: stock comes from bookshop_branch_stock. Rows
         // returned by bs_get_branch_stock are already joined to books, but
@@ -278,7 +283,8 @@ add_action('wp_ajax_bs_export_report_pdf', function() {
     if ( !bs_user_can_manage() ) wp_die('Unauthorized');
     $from   = sanitize_text_field($_GET['from'] ?? date('Y-m-01'));
     $to     = sanitize_text_field($_GET['to']   ?? date('Y-m-d'));
-    $branch = intval($_GET['branch'] ?? 0);
+    $branch = bs_validate_report_branch( intval($_GET['branch'] ?? 0) );
+    if ( $branch === false ) wp_die('You do not have access to that branch.');
     $args   = ['bookshop_print_report'=>1,'from'=>$from,'to'=>$to,'auto_print'=>1];
     if ( $branch ) $args['branch'] = $branch;
     // Redirect to the printable report page which handles PDF output

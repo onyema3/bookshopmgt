@@ -49,6 +49,53 @@ function filterBooks(){
 $('#bs-book-search,#bs-genre-filter,#bs-status-filter').on('input change',filterBooks);
 $('#bs-low-stock-filter').on('change',filterBooks);
 
+// Stock breakdown by branch for one book
+$(document).on('click','.bs-book-by-branch',function(){
+    var id   = $(this).data('id');
+    var ttl  = $(this).data('title') || 'Book';
+    $('#bs-book-by-branch-modal .bs-modal-header h2').text('Stock by Branch — '+ttl);
+    $('#bs-book-by-branch-body').html('<em>Loading…</em>');
+    openModal('#bs-book-by-branch-modal');
+    get({action:'bs_get_book_branch_breakdown',book_id:id}).then(function(res){
+        if(!res.success){
+            $('#bs-book-by-branch-body').html('<em>'+(res.data||'Error')+'</em>');
+            return;
+        }
+        var d = res.data || {};
+        var rows = d.rows || [];
+        var low  = parseInt(d.low||0);
+        var html = '<div style="margin-bottom:10px;font-size:.85rem;color:#666">'
+                 + 'Global stock_qty: <strong>'+parseInt(d.global||0)+'</strong>'
+                 + ' &middot; Low-stock threshold: <strong>'+low+'</strong>'
+                 + '</div>';
+        if(!rows.length){
+            html += '<p style="color:#999">No branches available.</p>';
+        } else {
+            html += '<table class="bs-table bs-table-sm"><thead><tr><th>Branch</th><th>Qty</th></tr></thead><tbody>';
+            var branchSum = 0;
+            rows.forEach(function(r){
+                var q = parseInt(r.qty)||0;
+                branchSum += q;
+                var cls = q===0 ? 'bs-out-stock' : (q<=low ? 'bs-low-stock' : '');
+                html += '<tr><td>'+esc(r.branch_name)+'</td>'
+                     + '<td class="'+cls+'">'+q+'</td></tr>';
+            });
+            html += '</tbody><tfoot><tr><th>Across visible branches</th><th>'+branchSum+'</th></tr></tfoot></table>';
+            // Helpful nudge when global and per-branch sum diverge — e.g.
+            // pre-v4 sales hit only the global counter, or a backfill was
+            // skipped for some books.
+            if(parseInt(d.global||0) !== branchSum){
+                html += '<p style="font-size:.8rem;color:#92400e;margin-top:8px">'
+                     + '⚠️ Global stock_qty differs from the per-branch sum. '
+                     + 'This usually means historical sales (before per-branch '
+                     + 'tracking) or books that were never seeded for some '
+                     + 'branches.</p>';
+            }
+        }
+        $('#bs-book-by-branch-body').html(html);
+    });
+});
+
 // ── Books: margin preview ─────────────────────────────────────
 function updateMarginPreview(){
     const cost=parseFloat($('#bs-f-cost').val())||0;
@@ -534,6 +581,8 @@ $(document).on('click','#bs-add-branch',function(){
     $('#bs-bf-name,#bs-bf-phone,#bs-bf-email,#bs-bf-manager').val('');
     $('#bs-bf-address').val('');
     $('#bs-bf-status').val('active');
+    // Backfill choice only matters on the create path. Show it here.
+    $('#bs-branch-backfill-row').show();
     openModal('#bs-branch-modal');
 });
 $(document).on('click','.bs-edit-branch',function(){
@@ -544,19 +593,34 @@ $(document).on('click','.bs-edit-branch',function(){
         $('#bs-bf-name').val(b.name);$('#bs-bf-address').val(b.address);
         $('#bs-bf-phone').val(b.phone);$('#bs-bf-email').val(b.email);
         $('#bs-bf-manager').val(b.manager);$('#bs-bf-status').val(b.status);
+        // Hide the backfill section on edit — running it again on an
+        // existing branch is mostly a footgun (INSERT IGNORE skips rows
+        // that already exist, so it can only ever seed *new* books, which
+        // is what bs_check_reorder / per-book stock take are for).
+        $('#bs-branch-backfill-row').hide();
         openModal('#bs-branch-modal');
     });
 });
 $(document).on('click','#bs-save-branch',function(){
     if(!$('#bs-bf-name').val().trim()){alert('Branch name required');return;}
+    var isNew = !$('#bs-branch-id').val();
+    var backfill = isNew ? ($('input[name="bs-bf-backfill"]:checked').val() || '') : '';
     const btn=$(this).prop('disabled',true).text('Saving…');
     post({action:'bs_save_branch',id:$('#bs-branch-id').val(),
         name:$('#bs-bf-name').val(),address:$('#bs-bf-address').val(),
         phone:$('#bs-bf-phone').val(),email:$('#bs-bf-email').val(),
-        manager:$('#bs-bf-manager').val(),status:$('#bs-bf-status').val()
+        manager:$('#bs-bf-manager').val(),status:$('#bs-bf-status').val(),
+        backfill:backfill
     }).then(function(res){
         btn.prop('disabled',false).text('Save Branch');
-        if(res.success) location.reload(); else alert('Save failed.');
+        if(!res.success){alert('Save failed.');return;}
+        // If the server seeded N branch_stock rows, mention it before reload
+        // so the manager has a chance to see what just happened.
+        var seeded = res.data && parseInt(res.data.backfilled||0);
+        if(seeded > 0){
+            alert('Branch saved. ' + seeded + ' books seeded into this branch\'s stock.');
+        }
+        location.reload();
     });
 });
 $(document).on('click','.bs-view-branch-stock',function(){

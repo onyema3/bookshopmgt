@@ -12,28 +12,59 @@ function bs_get_books( $args = [] ) {
         'low_stock'=> false,
         'orderby'  => 'title',
         'order'    => 'ASC',
+        'branch_id'=> 0,
     ]);
     $where = ['1=1']; $p = [];
     if ( $a['status'] !== '' && $a['status'] !== null ) {
-        $where[] = 'status = %s'; $p[] = $a['status'];
+        $where[] = 'b.status = %s'; $p[] = $a['status'];
     }
     if ( $a['genre'] ) {
-        $where[] = 'genre = %s'; $p[] = $a['genre'];
+        $where[] = 'b.genre = %s'; $p[] = $a['genre'];
     }
     if ( $a['low_stock'] ) {
-        $where[] = 'stock_qty <= low_stock_threshold AND stock_qty >= 0';
+        // Low-stock filter still operates on the listing's effective stock,
+        // which is the branch column when scoped or the global column otherwise.
+        if ( intval($a['branch_id']) > 0 ) {
+            $where[] = 'COALESCE(bst.qty,0) <= b.low_stock_threshold AND COALESCE(bst.qty,0) >= 0';
+        } else {
+            $where[] = 'b.stock_qty <= b.low_stock_threshold AND b.stock_qty >= 0';
+        }
     }
     if ( $a['search'] ) {
         $s = '%' . $wpdb->esc_like( trim($a['search']) ) . '%';
-        $where[] = '(title LIKE %s OR author LIKE %s OR isbn LIKE %s OR barcode LIKE %s)';
+        $where[] = '(b.title LIKE %s OR b.author LIKE %s OR b.isbn LIKE %s OR b.barcode LIKE %s)';
         $p[] = $s; $p[] = $s; $p[] = $s; $p[] = $s;
     }
-    $ob = in_array($a['orderby'], ['title','author','stock_qty','sell_price','created_at'])
+    $ob_col = in_array($a['orderby'], ['title','author','stock_qty','sell_price','created_at'])
         ? $a['orderby'] : 'title';
+    // When scoped to a branch, "stock_qty" sorting should follow the branch
+    // count, not the global column.
+    if ( $ob_col === 'stock_qty' && intval($a['branch_id']) > 0 ) {
+        $ob = 'COALESCE(bst.qty,0)';
+    } else {
+        $ob = 'b.' . $ob_col;
+    }
     $od = $a['order'] === 'DESC' ? 'DESC' : 'ASC';
+
+    // Per-branch listing: LEFT JOIN bookshop_branch_stock and rewrite stock_qty
+    // in the SELECT so every consumer (POS catalogue, search results, REST,
+    // CSV export) gets the branch's view of stock without a second query.
+    // Books with no row at this branch surface as qty=0, which is what the
+    // oversell guard expects.
+    if ( intval($a['branch_id']) > 0 ) {
+        array_unshift($p, intval($a['branch_id']));
+        $select = "b.*, COALESCE(bst.qty, 0) AS stock_qty";
+        $from   = "{$wpdb->prefix}bookshop_books b
+                   LEFT JOIN {$wpdb->prefix}bookshop_branch_stock bst
+                          ON bst.book_id = b.id AND bst.branch_id = %d";
+    } else {
+        $select = "b.*";
+        $from   = "{$wpdb->prefix}bookshop_books b";
+    }
+
     $p[] = intval($a['limit']);
     $p[] = intval($a['offset']);
-    $sql = "SELECT * FROM {$wpdb->prefix}bookshop_books
+    $sql = "SELECT $select FROM $from
             WHERE " . implode(' AND ', $where) . "
             ORDER BY $ob $od
             LIMIT %d OFFSET %d";

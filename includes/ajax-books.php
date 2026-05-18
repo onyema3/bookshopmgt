@@ -4,8 +4,25 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // ── POS: Search books ─────────────────────────────────────────────────────────
 add_action('wp_ajax_bs_search_books', function() {
     if ( !bs_user_can_pos() ) wp_send_json_error('Unauthorized', 403);
-    $q     = sanitize_text_field( $_GET['q'] ?? '' );
-    $books = bs_get_books(['search' => $q, 'status' => 'active', 'limit' => 30]);
+    $q = sanitize_text_field( $_GET['q'] ?? '' );
+
+    // Resolve the active branch from the same source the sale flow trusts:
+    // open shift first (authoritative once a shift is running), session's
+    // active branch as a fallback. Returning per-branch stock here keeps the
+    // POS catalogue badges honest — a cashier should see "0 in stock" for a
+    // book that's only at another branch, not the global aggregate.
+    $uid    = get_current_user_id();
+    $shift  = function_exists('bs_get_open_shift') ? bs_get_open_shift($uid) : null;
+    $branch = $shift && $shift->branch_id
+        ? intval($shift->branch_id)
+        : ( function_exists('bs_get_active_branch_id') ? bs_get_active_branch_id($uid) : 0 );
+
+    $books = bs_get_books([
+        'search'    => $q,
+        'status'    => 'active',
+        'limit'     => 30,
+        'branch_id' => $branch,
+    ]);
     // Always return an array (never null)
     wp_send_json_success( is_array($books) ? array_values($books) : [] );
 });
