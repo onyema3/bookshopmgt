@@ -3,12 +3,40 @@
 .bs-portal-wrap{font-family:'DM Sans',sans-serif;color:var(--bs-ink);max-width:820px;margin:0 auto;padding:20px 16px}
 
 /* ── Login ───────────────────────────────────── */
-.bsp-login-wrap{display:flex;align-items:center;justify-content:center;min-height:60vh}
-.bsp-login-card{background:#fff;border:1.5px solid var(--bs-border);border-radius:16px;padding:40px 32px;max-width:420px;width:100%;box-shadow:0 4px 30px rgba(0,0,0,.08);text-align:center}
-.bsp-login-icon{font-size:3rem;margin-bottom:12px}
-.bsp-login-title{font-family:'Playfair Display',serif;font-size:1.6rem;margin-bottom:8px}
-.bsp-login-sub{font-size:.88rem;color:var(--bs-muted);margin-bottom:24px}
-.bsp-login-note{font-size:.78rem;color:var(--bs-muted);margin-top:16px}
+/* Note: many WordPress themes set input[type="text"]{width:auto;max-width:...}
+   which made the login input render visibly narrower than the button. We use
+   high-specificity selectors plus !important on width and box-sizing to win
+   over those theme rules without breaking the inputs everywhere else. */
+.bsp-login-wrap{display:flex;align-items:center;justify-content:center;min-height:60vh;padding:20px 0}
+.bsp-login-card{background:#fff;border:1.5px solid var(--bs-border);border-radius:16px;padding:36px 28px;max-width:420px;width:100%;box-shadow:0 4px 30px rgba(0,0,0,.08);text-align:center}
+.bsp-login-icon{font-size:3rem;margin-bottom:8px;line-height:1}
+.bsp-login-title{font-family:'Playfair Display',serif;font-size:1.7rem;margin-bottom:6px;color:var(--bs-ink)}
+.bsp-login-sub{font-size:.9rem;color:var(--bs-muted);margin:0 auto 22px;max-width:300px;line-height:1.45}
+.bsp-login-card .bsp-field{margin-bottom:14px;width:100%}
+.bs-portal-wrap .bsp-login-card input.bsp-input,
+.bs-portal-wrap .bsp-login-card #bsp-identifier{
+    width:100% !important;
+    max-width:100% !important;
+    min-width:0 !important;
+    display:block !important;
+    box-sizing:border-box !important;
+    font-size:.95rem;
+    padding:11px 14px;
+    margin:0;
+    height:auto;
+}
+.bsp-login-card .bsp-input::placeholder{color:#b8a98f;font-size:.85rem;opacity:1}
+.bs-portal-wrap .bsp-login-card .bsp-btn{
+    width:100% !important;
+    max-width:100% !important;
+    box-sizing:border-box !important;
+    margin-top:4px;
+}
+.bsp-login-note{font-size:.78rem;color:var(--bs-muted);margin-top:18px;line-height:1.5}
+@media(max-width:480px){
+    .bsp-login-card{padding:28px 20px}
+    .bsp-login-title{font-size:1.4rem}
+}
 
 /* ── Shared ──────────────────────────────────── */
 .bsp-btn{width:100%;padding:12px;border:none;border-radius:var(--bs-r);cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:600;font-size:.95rem;transition:.15s}
