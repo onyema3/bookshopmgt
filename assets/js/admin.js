@@ -406,11 +406,58 @@ $(document).on('click','.bs-adjust-stock',function(){
 $('#bs-import-csv-btn').on('click',()=>openModal('#bs-import-modal'));
 $('#bs-csv-template').on('click',function(e){
     e.preventDefault();
-    const rows=[['title','author','isbn','genre','publisher','publish_year','cost_price','sell_price','stock_qty','description'],
-                ['Example Book','John Doe','9780000000000','Fiction','Publisher',2024,500,800,10,'A great book']];
-    let csv=rows.map(r=>r.join(',')).join('\n');
-    const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-    a.download='bookshop-template.csv';a.click();
+    // Fetch this user's allowed branches first, so the template includes
+    // a branch_<id> column per branch and the example row shows where
+    // per-branch stock would go. The qty fetch with book_id=0 just
+    // returns the branch list with qty=0 across the board, which is
+    // exactly the placeholder we want here.
+    //
+    // We use $.ajax with both done/fail so the button still works on
+    // shops where the bs_get_book_branches endpoint isn't registered
+    // (it ships with the per-branch editor PR; this importer change
+    // is meant to be independently mergeable). On any kind of failure
+    // we just download the legacy single-stock template.
+    function buildAndDownload(branches){
+        const baseCols = ['title','author','isbn','genre','publisher','publish_year','cost_price','sell_price','stock_qty','description'];
+        const baseRow  = ['Example Book','John Doe','9780000000000','Fiction','Publisher',2024,500,800,10,'A great book'];
+        let header = baseCols.slice();
+        let example = baseRow.slice();
+        if(branches && branches.length){
+            // When branch columns are present, the global stock_qty is
+            // derived from the sum on the server, so leave it blank
+            // in the template to avoid confusion.
+            const stockIdx = header.indexOf('stock_qty');
+            if(stockIdx>=0) example[stockIdx]='';
+            const split = Math.floor(10/branches.length);
+            const remainder = 10 - split*branches.length;
+            branches.forEach(function(b,i){
+                // Prefer slug when the server returned one (per-branch
+                // editor PR adds it); fall back to numeric id, which
+                // the importer also accepts.
+                const key = b.slug || ('id_'+b.id);
+                header.push('branch_'+(b.slug ? b.slug : b.id));
+                example.push(split + (i===0?remainder:0));
+            });
+        }
+        const csv = [header.join(','), example.join(',')].join('\n');
+        const a = document.createElement('a');
+        a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+        a.download = 'bookshop-template.csv';
+        a.click();
+    }
+    $.ajax({
+        url: ajax_url,
+        method: 'GET',
+        data: {action:'bs_get_book_branches', book_id: 0},
+        timeout: 5000
+    }).done(function(res){
+        const branches = (res && res.success && res.data && res.data.branches) || [];
+        buildAndDownload(branches);
+    }).fail(function(){
+        // Endpoint missing or network failure — just give the legacy
+        // template so the button still does something useful.
+        buildAndDownload([]);
+    });
 });
 $('#bs-do-import').on('click',function(){
     const file=$('#bs-csv-file')[0].files[0];
@@ -422,9 +469,23 @@ $('#bs-do-import').on('click',function(){
         if(res.success){
             const d=res.data;
             let msg=`<strong style="color:green">✓ Imported ${d.imported} book(s)</strong>`;
+            // Per-branch import summary, surfaced only when the file
+            // actually had branch_* columns. Distinguishes "matched"
+            // (mapped to a branch the user can write to) from
+            // "in_file" (sent by the user) so a typo in a branch slug
+            // is visible rather than a silent no-op.
+            const inFile  = parseInt(d.branch_columns_in_file||0);
+            const matched = parseInt(d.branch_columns_matched||0);
+            const set     = parseInt(d.branch_qty_set||0);
+            if(inFile>0){
+                msg += `<br><span style="color:#5b3e0a">🏪 ${set} per-branch quantit${set===1?'y':'ies'} set across ${matched}/${inFile} branch column${inFile===1?'':'s'}.</span>`;
+                if(matched < inFile){
+                    msg += `<br><small style="color:#92400e">${inFile-matched} branch column${(inFile-matched)===1?' was':'s were'} ignored — branch not found, or you don't have access to it.</small>`;
+                }
+            }
             if(d.errors&&d.errors.length)msg+=`<br><small style="color:red">${d.errors.join('<br>')}</small>`;
             $('#bs-import-result').html(msg);
-            setTimeout(()=>location.reload(),1500);
+            setTimeout(()=>location.reload(),1800);
         } else $('#bs-import-result').html('<span style="color:red">Import failed.</span>');
     });
 });
