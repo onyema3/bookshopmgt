@@ -178,7 +178,7 @@ function bs_page_books(){
         <div class="bs-form-group"><label>Year</label><input type="number" id="bs-f-year" class="bs-input" min="1800" max="2099"></div>
         <div class="bs-form-group"><label>Cost Price (<?=bs_currency()?>)</label><input type="number" id="bs-f-cost" class="bs-input" step="0.01" min="0"></div>
         <div class="bs-form-group"><label>Selling Price (<?=bs_currency()?>)</label><input type="number" id="bs-f-price" class="bs-input" step="0.01" min="0"></div>
-        <div class="bs-form-group"><label>Stock Qty</label><input type="number" id="bs-f-stock" class="bs-input" min="0"></div>
+        <div class="bs-form-group"><label id="bs-f-stock-label">Stock Qty</label><input type="number" id="bs-f-stock" class="bs-input" min="0"></div>
         <div class="bs-form-group"><label>Low Stock Alert At</label><input type="number" id="bs-f-threshold" class="bs-input" min="0" value="5"></div>
         <div class="bs-form-group"><label>Shelf Location</label><input type="text" id="bs-f-location" class="bs-input" placeholder="e.g. A3, Shelf 2"></div>
         <div class="bs-form-group"><label>Barcode</label><input type="text" id="bs-f-barcode" class="bs-input"></div>
@@ -187,6 +187,16 @@ function bs_page_books(){
         </div>
         <div class="bs-form-group bs-span2"><label>Cover Image URL</label><input type="url" id="bs-f-cover" class="bs-input"></div>
         <div class="bs-form-group bs-span2"><label>Description</label><textarea id="bs-f-desc" class="bs-input" rows="3"></textarea></div>
+        <div class="bs-form-group bs-span2" id="bs-f-branch-stock-wrap" style="display:none">
+            <label style="display:flex;align-items:center;justify-content:space-between">
+                <span>🏪 Stock by Branch</span>
+                <span style="font-size:.78rem;color:var(--muted);font-weight:400">Sum will become the book's total stock.</span>
+            </label>
+            <div id="bs-f-branch-stock-list" style="background:#fdf8f0;border:1px solid #e0d4c0;border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:.88rem">
+                <div style="color:var(--muted);font-size:.82rem">Loading branches…</div>
+            </div>
+            <div id="bs-f-branch-stock-total" style="margin-top:6px;text-align:right;font-size:.82rem;color:var(--muted)"></div>
+        </div>
         <div class="bs-form-group bs-span2" id="bs-margin-preview" style="background:#f5efe4;border-radius:8px;padding:10px;display:none">
             <strong>Margin Preview:</strong> <span id="bs-margin-val"></span>
         </div>
