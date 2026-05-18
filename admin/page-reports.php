@@ -125,6 +125,19 @@ function bs_page_reports(){
         <button class="bs-tab" data-tab="rpt-staff">Staff</button>
         <button class="bs-tab" data-tab="rpt-inventory">Inventory</button>
         <button class="bs-tab" data-tab="rpt-payments">Payments</button>
+        <?php
+        // Drift tab is admin-only because it surfaces cross-branch sums for
+        // every active book in one place — a manager scoped to one branch
+        // shouldn't see another location's per-book numbers via this tab.
+        $is_admin_view = function_exists('bs_user_is_admin') && bs_user_is_admin();
+        if ( $is_admin_view ):
+            $drift_rows  = function_exists('bs_get_stock_drift') ? bs_get_stock_drift(0, 500) : [];
+            $drift_count = count($drift_rows);
+        ?>
+        <button class="bs-tab" data-tab="rpt-drift">
+            Drift<?php if($drift_count): ?> <span style="background:var(--red);color:#fff;border-radius:10px;padding:1px 8px;font-size:.7rem;margin-left:4px"><?=$drift_count?></span><?php endif; ?>
+        </button>
+        <?php endif; ?>
     </div>
 
     <!-- ── Overview Tab ───────────────────────────────────────────────────── -->
@@ -397,6 +410,74 @@ function bs_page_reports(){
             </div>
         </div>
     </div>
+
+    <?php if ( $is_admin_view ): ?>
+    <!-- ── Drift Tab (admin-only) ────────────────────────────────────────── -->
+    <div id="rpt-drift" class="bs-tab-content" style="display:none">
+        <div class="bs-report-card">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+                <div>
+                    <h3>🔧 Stock Drift</h3>
+                    <p style="font-size:.83rem;color:var(--muted);max-width:640px;margin-top:4px">
+                        Books whose global <code>stock_qty</code> disagrees with the sum of their per-branch counts.
+                        Common causes: pre-v4 sales (which only decremented the global counter), or books that
+                        were never seeded at one or more branches.
+                    </p>
+                </div>
+                <?php if ( $drift_count ): ?>
+                <button class="bs-btn bs-btn-primary" id="bs-reconcile-all-drift" style="font-size:.82rem">
+                    🔧 Reconcile all (<?=$drift_count?>)
+                </button>
+                <?php endif; ?>
+            </div>
+            <?php if ( ! $drift_count ): ?>
+                <p style="color:var(--green,#2a7a3b);padding:24px;text-align:center;font-weight:600">
+                    ✓ No drift detected — every active book's global stock matches its per-branch sum.
+                </p>
+            <?php else: ?>
+                <div style="overflow-x:auto">
+                <table class="bs-table bs-table-sm" id="bs-drift-table">
+                    <thead><tr>
+                        <th>Title</th><th>Author</th><th>ISBN</th>
+                        <th title="bookshop_books.stock_qty">Global</th>
+                        <th title="SUM(bookshop_branch_stock.qty) across active branches">Branch Sum</th>
+                        <th>Δ</th>
+                        <th title="Active branches with a row for this book / total active branches">Coverage</th>
+                        <th>Action</th>
+                    </tr></thead>
+                    <tbody>
+                    <?php foreach ( $drift_rows as $r ):
+                        $delta    = intval($r->branch_sum) - intval($r->global_qty);
+                        $delta_cls= $delta > 0 ? 'bs-margin-good' : 'bs-margin-low';
+                        $coverage = intval($r->branches_with_row).'/'.intval($r->active_branches);
+                    ?>
+                    <tr data-book-id="<?=intval($r->id)?>">
+                        <td><strong><?=esc_html($r->title)?></strong></td>
+                        <td><?=esc_html($r->author)?></td>
+                        <td><code><?=esc_html($r->isbn)?></code></td>
+                        <td><?=intval($r->global_qty)?></td>
+                        <td><?=intval($r->branch_sum)?></td>
+                        <td><span class="bs-margin <?=$delta_cls?>"><?=($delta>0?'+':'').$delta?></span></td>
+                        <td><?=esc_html($coverage)?></td>
+                        <td>
+                            <button class="bs-btn bs-btn-secondary bs-drift-reconcile" data-book-id="<?=intval($r->id)?>" data-title="<?=esc_attr($r->title)?>" style="font-size:.75rem;padding:4px 10px">
+                                Set global = <?=intval($r->branch_sum)?>
+                            </button>
+                            <button class="bs-icon-btn bs-book-by-branch" data-id="<?=intval($r->id)?>" data-title="<?=esc_attr($r->title)?>" title="See by branch">🏪</button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <p style="font-size:.75rem;color:var(--muted);margin-top:8px">
+                    Reconciling sets the global <code>stock_qty</code> to the branch sum. The change is logged to the audit trail.
+                    Limited to the first 500 drifted books — if you have more, reconcile-all and refresh.
+                </p>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php endif; ?>
 
     </div><!-- .bs-wrap -->
 

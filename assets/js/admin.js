@@ -2,6 +2,7 @@
 jQuery(function($){
 const {ajax_url,nonce,export_url}=BSAdmin;
 const currency=BSAdmin.currency||'₦';
+const isAdmin=!!BSAdmin.is_admin;
 
 // ── Utils ────────────────────────────────────────────────────
 function fmt(n){return currency+parseFloat(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');}
@@ -53,9 +54,14 @@ $('#bs-low-stock-filter').on('change',filterBooks);
 $(document).on('click','.bs-book-by-branch',function(){
     var id   = $(this).data('id');
     var ttl  = $(this).data('title') || 'Book';
+    $('#bs-book-by-branch-modal').data('book-id', id).data('book-title', ttl);
+    loadBookBranchBreakdown(id, ttl);
+    openModal('#bs-book-by-branch-modal');
+});
+
+function loadBookBranchBreakdown(id, ttl){
     $('#bs-book-by-branch-modal .bs-modal-header h2').text('Stock by Branch — '+ttl);
     $('#bs-book-by-branch-body').html('<em>Loading…</em>');
-    openModal('#bs-book-by-branch-modal');
     get({action:'bs_get_book_branch_breakdown',book_id:id}).then(function(res){
         if(!res.success){
             $('#bs-book-by-branch-body').html('<em>'+(res.data||'Error')+'</em>');
@@ -64,15 +70,16 @@ $(document).on('click','.bs-book-by-branch',function(){
         var d = res.data || {};
         var rows = d.rows || [];
         var low  = parseInt(d.low||0);
+        var globalQty = parseInt(d.global||0);
         var html = '<div style="margin-bottom:10px;font-size:.85rem;color:#666">'
-                 + 'Global stock_qty: <strong>'+parseInt(d.global||0)+'</strong>'
+                 + 'Global stock_qty: <strong>'+globalQty+'</strong>'
                  + ' &middot; Low-stock threshold: <strong>'+low+'</strong>'
                  + '</div>';
+        var branchSum = 0;
         if(!rows.length){
             html += '<p style="color:#999">No branches available.</p>';
         } else {
             html += '<table class="bs-table bs-table-sm"><thead><tr><th>Branch</th><th>Qty</th></tr></thead><tbody>';
-            var branchSum = 0;
             rows.forEach(function(r){
                 var q = parseInt(r.qty)||0;
                 branchSum += q;
@@ -81,18 +88,95 @@ $(document).on('click','.bs-book-by-branch',function(){
                      + '<td class="'+cls+'">'+q+'</td></tr>';
             });
             html += '</tbody><tfoot><tr><th>Across visible branches</th><th>'+branchSum+'</th></tr></tfoot></table>';
-            // Helpful nudge when global and per-branch sum diverge — e.g.
-            // pre-v4 sales hit only the global counter, or a backfill was
-            // skipped for some books.
-            if(parseInt(d.global||0) !== branchSum){
-                html += '<p style="font-size:.8rem;color:#92400e;margin-top:8px">'
-                     + '⚠️ Global stock_qty differs from the per-branch sum. '
-                     + 'This usually means historical sales (before per-branch '
-                     + 'tracking) or books that were never seeded for some '
-                     + 'branches.</p>';
+        }
+        // Drift block. Only shown when the two figures actually disagree.
+        // The reconcile button is only rendered for admins because the
+        // server-side endpoint is admin-only — non-admins would just get
+        // a 403 if they clicked it.
+        if(globalQty !== branchSum){
+            var delta = branchSum - globalQty;
+            var dir   = delta > 0 ? 'higher' : 'lower';
+            html += '<div style="margin-top:10px;padding:10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;font-size:.83rem;color:#92400e">'
+                 + '⚠️ Global stock_qty differs from the per-branch sum by <strong>'
+                 + Math.abs(delta) + '</strong>. The branch sum is ' + dir + ' than global.'
+                 + '<br><span style="font-size:.78rem;color:#78350f">'
+                 + 'Common causes: pre-v4 sales (only the global counter was decremented), '
+                 + 'or books that were never seeded at one or more branches.'
+                 + '</span>';
+            if(isAdmin){
+                html += '<div style="margin-top:8px"><button class="bs-btn bs-btn-secondary" id="bs-reconcile-this-book" '
+                     + 'data-book-id="'+id+'" style="font-size:.78rem;padding:5px 12px">'
+                     + '🔧 Set global = ' + branchSum + ' (sum of branches)'
+                     + '</button></div>';
             }
+            html += '</div>';
         }
         $('#bs-book-by-branch-body').html(html);
+    });
+}
+
+$(document).on('click','#bs-reconcile-this-book',function(){
+    var bookId = $(this).data('book-id');
+    var ttl    = $('#bs-book-by-branch-modal').data('book-title') || 'Book';
+    if(!confirm('This will set the global stock_qty for "'+ttl+'" to the sum of its per-branch counts. The change is logged in the audit trail. Continue?')) return;
+    var btn = $(this).prop('disabled',true).text('Reconciling…');
+    post({action:'bs_reconcile_book_stock', book_id: bookId}).then(function(res){
+        if(!res.success){
+            alert('Reconcile failed: '+(res.data||'Unknown error'));
+            btn.prop('disabled',false).text('🔧 Set global = sum of branches');
+            return;
+        }
+        // Refresh the modal in place so the warning disappears and the new
+        // global value is visible. Also refresh the row in the books table
+        // if the user is on that page — easier to just reload the body.
+        loadBookBranchBreakdown(bookId, ttl);
+    });
+});
+
+// ── Drift tab on reports page ─────────────────────────────────────────────────
+// Per-row reconcile: hits the same endpoint as the breakdown modal, then
+// drops the row from the drift table on success. Counter-style — no full
+// page reload, since the user is likely working through the list.
+$(document).on('click','.bs-drift-reconcile',function(){
+    var bookId = $(this).data('book-id');
+    var ttl    = $(this).data('title') || 'Book';
+    if(!confirm('Set global stock for "'+ttl+'" to the sum of its branches?')) return;
+    var btn = $(this).prop('disabled',true).text('Working…');
+    post({action:'bs_reconcile_book_stock', book_id: bookId}).then(function(res){
+        if(!res.success){
+            alert('Reconcile failed: '+(res.data||'Unknown error'));
+            btn.prop('disabled',false);
+            return;
+        }
+        // Drop the row. If that empties the table, swap the success state in.
+        var $row = btn.closest('tr');
+        $row.fadeOut(160,function(){
+            $row.remove();
+            if(!$('#bs-drift-table tbody tr').length){
+                $('#bs-drift-table').replaceWith(
+                    '<p style="color:var(--green,#2a7a3b);padding:24px;text-align:center;font-weight:600">'
+                    + '✓ No drift detected — every active book\'s global stock matches its per-branch sum.'
+                    + '</p>'
+                );
+                $('#bs-reconcile-all-drift').remove();
+            }
+        });
+    });
+});
+$(document).on('click','#bs-reconcile-all-drift',function(){
+    if(!confirm('Set global stock_qty to the per-branch sum for every drifted book? This is logged to the audit trail.')) return;
+    var btn = $(this).prop('disabled',true).text('Reconciling…');
+    post({action:'bs_reconcile_all_drift'}).then(function(res){
+        btn.prop('disabled',false).text('🔧 Reconcile all');
+        if(!res.success){
+            alert('Reconcile-all failed: '+(res.data||'Unknown error'));
+            return;
+        }
+        var changed = parseInt(res.data.changed||0);
+        // Easier to reload than to surgically remove every row — the user is
+        // confirming a bulk action, so the tab refreshing is expected.
+        alert('Reconciled '+changed+' book'+(changed===1?'':'s')+'. Reloading the report.');
+        location.reload();
     });
 });
 
@@ -583,6 +667,8 @@ $(document).on('click','#bs-add-branch',function(){
     $('#bs-bf-status').val('active');
     // Backfill choice only matters on the create path. Show it here.
     $('#bs-branch-backfill-row').show();
+    // Re-seed row is for existing branches only.
+    $('#bs-branch-reseed-row').hide();
     openModal('#bs-branch-modal');
 });
 $(document).on('click','.bs-edit-branch',function(){
@@ -593,12 +679,78 @@ $(document).on('click','.bs-edit-branch',function(){
         $('#bs-bf-name').val(b.name);$('#bs-bf-address').val(b.address);
         $('#bs-bf-phone').val(b.phone);$('#bs-bf-email').val(b.email);
         $('#bs-bf-manager').val(b.manager);$('#bs-bf-status').val(b.status);
-        // Hide the backfill section on edit — running it again on an
-        // existing branch is mostly a footgun (INSERT IGNORE skips rows
-        // that already exist, so it can only ever seed *new* books, which
-        // is what bs_check_reorder / per-book stock take are for).
+        // Hide the *initial-stock* picker on edit — it controls the create
+        // path only and INSERT IGNORE makes "Copy" deceptive on a branch
+        // that's already accumulated genuine numbers.
         $('#bs-branch-backfill-row').hide();
+        // Re-seed row: only show when there's actually something to seed.
+        // The server returns missing_count = active books that don't yet
+        // have a row at this branch, which is exactly what would currently
+        // be rejected by the oversell guard.
+        var missing = parseInt(b.missing_count||0);
+        if(missing > 0){
+            $('#bs-branch-reseed-summary').html(
+                '<strong>'+missing+'</strong> active book'+(missing===1?'':'s')+
+                ' '+(missing===1?'has':'have')+
+                ' no row in this branch\'s stock yet. Sales of these books at this branch will be rejected by the oversell guard until they\'re seeded.'
+            );
+            // Reset disabled state in case the user is reopening after a
+            // partial seed earlier in the session.
+            $('#bs-branch-reseed-actions .bs-branch-reseed-btn')
+                .prop('disabled',false)
+                .each(function(){
+                    var m=$(this).data('mode');
+                    $(this).text(m==='copy'?'Seed at current global stock':'Seed at zero');
+                });
+            $('#bs-branch-reseed-row').show();
+        } else {
+            $('#bs-branch-reseed-row').hide();
+        }
         openModal('#bs-branch-modal');
+    });
+});
+
+// Re-seed buttons inside the edit modal. Hits the admin-only re-seed
+// endpoint, then refreshes the prompt in place — if missing_count is now
+// zero, the section hides itself rather than reload the page (the rest of
+// the modal state would be lost).
+$(document).on('click','.bs-branch-reseed-btn',function(){
+    var mode      = $(this).data('mode');
+    var branchId  = parseInt($('#bs-branch-id').val()) || 0;
+    if(!branchId){ alert('Save the branch first.'); return; }
+    var allBtns   = $('.bs-branch-reseed-btn');
+    var btn       = $(this).prop('disabled',true).text('Seeding…');
+    allBtns.not(btn).prop('disabled',true);
+    post({action:'bs_reseed_branch_stock', branch_id:branchId, mode:mode}).then(function(res){
+        if(!res.success){
+            alert('Re-seed failed: '+(res.data||'Unknown error'));
+            allBtns.prop('disabled',false).each(function(){
+                var m=$(this).data('mode');
+                $(this).text(m==='copy'?'Seed at current global stock':'Seed at zero');
+            });
+            return;
+        }
+        var seeded  = parseInt(res.data.seeded||0);
+        var missing = parseInt(res.data.missing||0);
+        if(missing > 0){
+            // Some books still missing (would only happen if "active" status
+            // changed during the request). Update the count and let the user
+            // try the other mode.
+            $('#bs-branch-reseed-summary').html(
+                '<strong>Seeded '+seeded+' book'+(seeded===1?'':'s')+'.</strong> '
+                + '<strong>'+missing+'</strong> still missing.'
+            );
+            allBtns.prop('disabled',false).each(function(){
+                var m=$(this).data('mode');
+                $(this).text(m==='copy'?'Seed at current global stock':'Seed at zero');
+            });
+        } else {
+            $('#bs-branch-reseed-summary').html(
+                '<strong>✓ Seeded '+seeded+' book'+(seeded===1?'':'s')+'.</strong> '
+                + 'No books are missing rows at this branch anymore.'
+            );
+            $('#bs-branch-reseed-actions').hide();
+        }
     });
 });
 $(document).on('click','#bs-save-branch',function(){

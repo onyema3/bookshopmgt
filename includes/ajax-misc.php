@@ -191,7 +191,55 @@ add_action('wp_ajax_bs_save_branch',function(){
 add_action('wp_ajax_bs_get_branch',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     $b=bs_get_branch(intval($_GET['id']??0));
-    $b?wp_send_json_success($b):wp_send_json_error('Not found');
+    if(!$b){ wp_send_json_error('Not found'); }
+    // Surface the count of active books that don't yet have a row in
+    // bookshop_branch_stock for this branch. The edit modal uses this to
+    // show a "re-seed missing books" prompt — a book added after the
+    // branch was created has no row, which means the oversell guard will
+    // reject every sale of it at this branch until the row exists.
+    $b->missing_count = bs_count_missing_branch_stock_rows(intval($b->id));
+    wp_send_json_success($b);
+});
+add_action('wp_ajax_bs_reseed_branch_stock',function(){
+    // Mutates branch_stock — admin-only because it can affect what the
+    // oversell guard accepts at this branch. (bs_user_can_manage would also
+    // work, but keeping it admin-only matches the reconcile policy below.)
+    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_verify('bs_admin_nonce'))         wp_send_json_error('Bad nonce');
+    $branch_id = intval($_POST['branch_id'] ?? 0);
+    $mode      = sanitize_text_field($_POST['mode'] ?? 'zero');
+    if(!$branch_id) wp_send_json_error('Missing branch_id');
+    if(!in_array($mode,['copy','zero'],true)) wp_send_json_error('Invalid mode');
+    if(!bs_get_branch($branch_id))            wp_send_json_error('Branch not found');
+    $seeded = bs_backfill_branch_stock($branch_id, $mode);
+    wp_send_json_success([
+        'seeded'  => intval($seeded),
+        'missing' => bs_count_missing_branch_stock_rows($branch_id),
+    ]);
+});
+
+// ── Drift detection & reconciliation ──────────────────────────────────────────
+// Mutating endpoints (reconcile) are admin-only because they overwrite
+// bookshop_books.stock_qty, which is a global value that bs_user_can_manage
+// alone shouldn't be allowed to change without trace. The read-only drift
+// list is admin-only too — exposing cross-branch totals to a manager scoped
+// to one branch would leak figures they're not allowed to see.
+add_action('wp_ajax_bs_get_stock_drift',function(){
+    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    $rows = bs_get_stock_drift(0, 500);
+    wp_send_json_success($rows);
+});
+add_action('wp_ajax_bs_reconcile_book_stock',function(){
+    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_verify('bs_admin_nonce'))         wp_send_json_error('Bad nonce');
+    $res = bs_reconcile_book_stock(intval($_POST['book_id'] ?? 0));
+    isset($res['error']) ? wp_send_json_error($res['error']) : wp_send_json_success($res);
+});
+add_action('wp_ajax_bs_reconcile_all_drift',function(){
+    if(!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
+    if(!bs_verify('bs_admin_nonce'))         wp_send_json_error('Bad nonce');
+    $res = bs_reconcile_all_drift(500);
+    wp_send_json_success($res);
 });
 add_action('wp_ajax_bs_get_branch_stock',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
