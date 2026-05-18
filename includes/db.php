@@ -457,3 +457,44 @@ function bs_install_v3_tables(){
     }
 }
 add_action('admin_init','bs_install_v3_tables');
+
+// ── v4: per-branch tracking on sales / shifts / held sales ───────────────────
+function bs_install_v4_tables(){
+    global $wpdb;
+
+    // bookshop_sales.branch_id
+    $sales_cols=$wpdb->get_col("SHOW COLUMNS FROM {$wpdb->prefix}bookshop_sales",0);
+    if(!in_array('branch_id',$sales_cols)){
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}bookshop_sales
+            ADD COLUMN branch_id BIGINT UNSIGNED DEFAULT NULL AFTER staff_id,
+            ADD KEY branch_id (branch_id)");
+    }
+
+    // bookshop_shifts.branch_id
+    $shift_cols=$wpdb->get_col("SHOW COLUMNS FROM {$wpdb->prefix}bookshop_shifts",0);
+    if(!in_array('branch_id',$shift_cols)){
+        $wpdb->query("ALTER TABLE {$wpdb->prefix}bookshop_shifts
+            ADD COLUMN branch_id BIGINT UNSIGNED DEFAULT NULL AFTER staff_id,
+            ADD KEY branch_id (branch_id)");
+    }
+
+    // bookshop_held_sales.branch_id (table only exists after v2 migration ran)
+    $held_table=$wpdb->get_var("SHOW TABLES LIKE '{$wpdb->prefix}bookshop_held_sales'");
+    if($held_table){
+        $held_cols=$wpdb->get_col("SHOW COLUMNS FROM {$wpdb->prefix}bookshop_held_sales",0);
+        if(!in_array('branch_id',$held_cols)){
+            $wpdb->query("ALTER TABLE {$wpdb->prefix}bookshop_held_sales
+                ADD COLUMN branch_id BIGINT UNSIGNED DEFAULT NULL AFTER staff_id,
+                ADD KEY branch_id (branch_id)");
+        }
+    }
+}
+add_action('admin_init','bs_install_v4_tables');
+// Also run on POS-side AJAX entry points so the new columns exist on the
+// frontend (admin_init never fires for non-admin users hitting admin-ajax.php).
+add_action('wp_ajax_bs_submit_sale',  'bs_install_v4_tables', 1);
+add_action('wp_ajax_bs_open_shift',   'bs_install_v4_tables', 1);
+add_action('wp_ajax_bs_close_shift',  'bs_install_v4_tables', 1);
+add_action('wp_ajax_bs_park_sale',    'bs_install_v4_tables', 1);
+add_action('wp_ajax_bs_pin_login',    'bs_install_v4_tables', 1);
+add_action('wp_ajax_nopriv_bs_pin_login', 'bs_install_v4_tables', 1);

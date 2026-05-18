@@ -28,6 +28,29 @@ function bs_render_pos(){
     $is_mgr =bs_user_can_manage();
     $mgr_thr=intval(get_option('bookshop_manager_discount_threshold',20));
     $shift  =bs_get_open_shift($user->ID);
+
+    // ── Resolve the active branch for this session ────────────────────────────
+    // Branches the user is allowed to operate from (every active branch for
+    // managers/admin, the assigned home branch for regular staff).
+    $allowed_branches = is_user_logged_in() ? bs_user_branches($user->ID) : [];
+
+    // Currently selected branch from user_meta. If we have a single allowed
+    // branch and nothing is selected yet, auto-select it so single-location
+    // staff don't see a picker on every login.
+    $active_branch_id = is_user_logged_in() ? bs_get_active_branch_id($user->ID) : 0;
+    if ( !$active_branch_id && count($allowed_branches) === 1 ) {
+        $auto = intval($allowed_branches[0]->id);
+        if ( bs_set_active_branch_id($user->ID, $auto) === true ) {
+            $active_branch_id = $auto;
+        }
+    }
+    // If the user has an open shift, the shift's branch is authoritative —
+    // keep the session in sync so they can't accidentally drift.
+    if ( $shift && intval($shift->branch_id) && intval($shift->branch_id) !== $active_branch_id ) {
+        bs_set_active_branch_id($user->ID, intval($shift->branch_id));
+        $active_branch_id = intval($shift->branch_id);
+    }
+    $active_branch = $active_branch_id ? bs_get_branch($active_branch_id) : null;
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -53,6 +76,15 @@ body{font-family:var(--fb);background:var(--paper);color:var(--ink);height:100vh
 .topbar-btn{background:none;border:1px solid #555;color:#ccc;padding:4px 10px;border-radius:20px;cursor:pointer;font-size:.75rem;font-family:var(--fb);transition:.15s}
 .topbar-btn:hover{background:#333;color:#fff}
 .topbar-btn.danger{border-color:#c0392b;color:#e57373}
+.branch-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(245,216,122,.15);border:1px solid var(--amber-d);color:var(--amber-l);padding:3px 10px;border-radius:20px;font-size:.78rem}
+.branch-pill strong{color:#fff;font-weight:600}
+.branch-switch-btn{background:none;border:none;color:var(--amber-l);font-size:.7rem;text-decoration:underline;cursor:pointer;padding:0;font-family:var(--fb);margin-left:2px}
+.branch-switch-btn:hover{color:#fff}
+.branch-list{display:grid;gap:8px;max-height:50vh;overflow-y:auto}
+.branch-option{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;background:#fff;cursor:pointer;text-align:left;font-family:var(--fb);transition:.15s}
+.branch-option:hover{border-color:var(--amber);background:var(--warm)}
+.branch-option.active{border-color:var(--amber);background:var(--amber-l)}
+.branch-option-meta{font-size:.75rem;color:var(--muted);margin-top:2px}
 
 /* Catalog */
 .catalog{background:var(--warm);display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border)}
@@ -212,6 +244,13 @@ if(!is_user_logged_in()): ?>
   <header class="topbar">
     <h1>📚 <?=esc_html($shop)?> POS</h1>
     <span class="topbar-info">Staff: <strong id="pos-staff-name"><?=esc_html($user->display_name)?></strong></span>
+    <span class="branch-pill" id="branch-pill" style="<?=$active_branch?'':'display:none'?>">
+        🏪 <strong id="branch-pill-name"><?=$active_branch?esc_html($active_branch->name):''?></strong>
+        <?php $can_switch = ($is_mgr || count($allowed_branches) > 1); ?>
+        <?php if($can_switch): ?>
+        <button class="branch-switch-btn" id="btn-switch-branch" title="Switch branch">Switch</button>
+        <?php endif; ?>
+    </span>
     <span class="topbar-info" id="pos-shift-info"></span>
     <button class="topbar-btn" id="btn-held-sales">📋 Held (<span id="held-count">0</span>)</button>
     <button class="topbar-btn" id="btn-park-sale" title="Park current sale [F2]">⏸ Park</button>
@@ -390,6 +429,58 @@ if(!is_user_logged_in()): ?>
     </div>
 </div>
 
+<!-- Branch Picker Modal -->
+<div class="modal-bg" id="branch-modal" style="<?=$active_branch ? 'display:none' : 'display:flex'?>">
+    <div class="modal-box" style="max-width:480px">
+        <div class="modal-hdr">
+            <h3 id="branch-modal-title"><?=$active_branch ? 'Switch Branch' : 'Select Your Branch'?></h3>
+            <button class="modal-close" id="branch-modal-close" style="<?=$active_branch ? '' : 'display:none'?>" onclick="document.getElementById('branch-modal').style.display='none'">✕</button>
+        </div>
+        <div class="modal-body">
+            <?php if(empty($allowed_branches)): ?>
+                <?php $any_branches = bs_get_branches(false); ?>
+                <p style="color:var(--red);margin-bottom:8px">⚠️ You are not assigned to any active branch.</p>
+                <?php if(empty($any_branches) && current_user_can('manage_options')): ?>
+                <p style="font-size:.85rem;color:var(--muted);margin-bottom:14px">
+                    No branches exist yet. <a href="<?=admin_url('admin.php?page=bookshop-branches')?>" target="_blank" style="color:var(--amber-d)">Create one in the admin area</a> and refresh.
+                </p>
+                <?php elseif($is_mgr): ?>
+                <p style="font-size:.85rem;color:var(--muted);margin-bottom:14px">
+                    All branches are inactive. Activate one from the <a href="<?=admin_url('admin.php?page=bookshop-branches')?>" target="_blank" style="color:var(--amber-d)">Branches admin page</a> and refresh.
+                </p>
+                <?php else: ?>
+                <p style="font-size:.85rem;color:var(--muted);margin-bottom:14px">Ask a manager to assign you a home branch from the Staff page in the admin area, then refresh.</p>
+                <?php endif; ?>
+                <div style="display:flex;gap:8px">
+                    <a href="<?=wp_logout_url(home_url('/?bookshop_pos=1'))?>" class="m-btn m-btn-sec" style="text-decoration:none;text-align:center;flex:1">Log Out</a>
+                </div>
+            <?php else: ?>
+                <p style="font-size:.85rem;color:var(--muted);margin-bottom:14px">
+                    <?php if($is_mgr): ?>
+                        Choose which branch you are operating from. All sales, shifts, and parked sales will be recorded against this branch.
+                    <?php else: ?>
+                        Confirm the branch you are working from today.
+                    <?php endif; ?>
+                </p>
+                <div class="branch-list">
+                    <?php foreach($allowed_branches as $b): ?>
+                    <button class="branch-option" data-branch-id="<?=esc_attr($b->id)?>" data-branch-name="<?=esc_attr($b->name)?>">
+                        <div>
+                            <div style="font-weight:600"><?=esc_html($b->name)?></div>
+                            <?php if($b->address): ?>
+                            <div class="branch-option-meta"><?=esc_html($b->address)?></div>
+                            <?php endif; ?>
+                        </div>
+                        <span style="color:var(--amber-d);font-weight:700">→</span>
+                    </button>
+                    <?php endforeach; ?>
+                </div>
+                <div id="branch-error" style="color:var(--red);font-size:.82rem;margin-top:10px;min-height:18px"></div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
 <!-- Receipt Modal -->
 <div class="modal-bg" id="receipt-modal" style="display:none">
     <div class="modal-box" style="max-width:420px">
@@ -492,6 +583,78 @@ let searchTimer, custTimer, currentSaleId=0, currentSaleCart=[];
 <?php $shift_id_init = $shift ? intval($shift->id) : 0; ?>
 let shiftId=<?=$shift_id_init?>;
 let currentTotal=0;
+
+// ── Branch session ─────────────────────────────────────────────
+let currentBranchId=<?=intval($active_branch_id)?>;
+const HAS_OPEN_SHIFT=<?=$shift?'true':'false'?>;
+function showBranchModal(forSwitch){
+    if(HAS_OPEN_SHIFT && forSwitch){
+        alert('Close your current shift before switching branches.');
+        return;
+    }
+    const modal=document.getElementById('branch-modal');
+    if(!modal) return;
+    document.getElementById('branch-modal-title').textContent =
+        forSwitch ? 'Switch Branch' : 'Select Your Branch';
+    document.getElementById('branch-modal-close').style.display = forSwitch ? '' : 'none';
+    const err=document.getElementById('branch-error');
+    if(err) err.textContent='';
+    modal.style.display='flex';
+}
+function hideBranchModal(){
+    const m=document.getElementById('branch-modal');
+    if(m) m.style.display='none';
+}
+function applyBranchUI(id,name){
+    currentBranchId=parseInt(id)||0;
+    const pill=document.getElementById('branch-pill');
+    const lbl =document.getElementById('branch-pill-name');
+    if(currentBranchId && pill){
+        if(lbl) lbl.textContent=name||'';
+        pill.style.display='';
+    } else if(pill){
+        pill.style.display='none';
+    }
+}
+// Wire up branch picker buttons
+document.querySelectorAll('.branch-option').forEach(btn=>{
+    btn.addEventListener('click',function(){
+        const id  =parseInt(this.dataset.branchId);
+        const name=this.dataset.branchName;
+        const err =document.getElementById('branch-error');
+        if(err) err.textContent='';
+        this.disabled=true;
+        post({action:'bs_set_active_branch',nonce:NONCE,branch_id:id}).then(d=>{
+            this.disabled=false;
+            if(d && d.success){
+                applyBranchUI(id,name);
+                hideBranchModal();
+                // Re-load held sales for the new branch context
+                if(typeof loadHeldSales==='function') loadHeldSales();
+            } else {
+                const msg=(d && d.data && d.data.message) ? d.data.message
+                          : (d && d.data) ? d.data : 'Could not set branch';
+                if(err) err.textContent=msg;
+                else alert(msg);
+            }
+        }).catch(()=>{ this.disabled=false; if(err) err.textContent='Network error'; });
+    });
+});
+const switchBtn=document.getElementById('btn-switch-branch');
+if(switchBtn) switchBtn.addEventListener('click',()=>showBranchModal(true));
+
+// Helper used by sale/shift error handlers below
+function handleNoBranchError(d,msgFallback){
+    if(d && d.data && d.data.code==='no_branch'){
+        showBranchModal(false);
+        return true;
+    }
+    if(d && d.data && d.data.code==='shift_open'){
+        alert(d.data.message || 'Close your current shift before switching branches.');
+        return true;
+    }
+    return false;
+}
 
 // ── PIN login (if needed) ──────────────────────────────────
 let pinVal='';
@@ -921,6 +1084,7 @@ function submitSale(){
             showReceipt(d.data);
         } else {
             if(d.data?.code==='manager_required'){showMgrModal();}
+            else if(handleNoBranchError(d)){/* picker shown */}
             else alert('Error: '+(typeof d.data==='string'?d.data:d.data?.message||'Unknown error'));
         }
     });
@@ -1098,7 +1262,10 @@ window.newSale=function(){
 };
 
 // ── Shift ─────────────────────────────────────────────────────
-document.getElementById('btn-open-shift').addEventListener('click',()=>document.getElementById('shift-open-modal').style.display='flex');
+document.getElementById('btn-open-shift').addEventListener('click',function(){
+    if(!currentBranchId){ showBranchModal(false); return; }
+    document.getElementById('shift-open-modal').style.display='flex';
+});
 document.getElementById('confirm-open-shift').addEventListener('click',()=>{
     const cash=parseFloat(document.getElementById('opening-cash').value)||0;
     post({action:'bs_open_shift',nonce:NONCE,opening_cash:cash}).then(d=>{
@@ -1107,6 +1274,12 @@ document.getElementById('confirm-open-shift').addEventListener('click',()=>{
             document.getElementById('btn-open-shift').style.display='none';
             document.getElementById('btn-close-shift').style.display='';
             document.getElementById('pos-shift-info').textContent='Shift open | Opening: '+CUR+fmt(cash);
+        } else {
+            if(handleNoBranchError(d)){
+                document.getElementById('shift-open-modal').style.display='none';
+            } else {
+                alert('Error: '+(typeof d.data==='string'?d.data:d.data?.message||'Could not open shift'));
+            }
         }
     });
 });
@@ -1208,6 +1381,10 @@ document.getElementById('btn-park-sale').addEventListener('click',function(){
             msg.textContent='Sale parked — '+ref;
             document.body.appendChild(msg);
             setTimeout(function(){msg.remove();},2500);
+        } else if(handleNoBranchError(d)){
+            /* picker shown */
+        } else {
+            alert('Could not park sale: '+(typeof d.data==='string'?d.data:d.data?.message||'Unknown error'));
         }
     });
 });

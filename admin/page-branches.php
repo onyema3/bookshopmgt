@@ -36,6 +36,7 @@ function bs_page_branches(){
         <?php if($b->manager): ?><p style="font-size:.8rem;color:var(--muted);margin-bottom:8px">👤 <?=esc_html($b->manager)?></p><?php endif; ?>
         <div style="display:flex;gap:12px;margin-top:10px">
             <div style="text-align:center"><div style="font-weight:700;font-size:1.1rem"><?=intval($stock_count)?></div><div style="font-size:.72rem;color:var(--muted)">Units</div></div>
+            <div style="text-align:center"><div style="font-weight:700;font-size:1.1rem"><?=intval($sales_count)?></div><div style="font-size:.72rem;color:var(--muted)">Sales</div></div>
         </div>
         <div style="display:flex;gap:6px;margin-top:12px">
             <button class="bs-btn bs-btn-secondary bs-edit-branch" data-id="<?=esc_attr($b->id)?>" style="font-size:.78rem;padding:5px 10px">Edit</button>

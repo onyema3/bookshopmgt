@@ -974,4 +974,30 @@ $(document).on('click','#bs-confirm-transfer',function(){
         }
     });
 });
+
+// ── Staff: Home branch assignment ─────────────────────────────────────────────
+$(document).on('change','.bs-staff-branch',function(){
+    var $sel    = $(this);
+    var uid     = $sel.data('uid');
+    var bid     = $sel.val();
+    var $status = $('.bs-staff-branch-status[data-uid="'+uid+'"]');
+    var prev    = $sel.data('prev-value');
+    if(typeof prev==='undefined') prev=$sel.find('option[selected]').val()||'0';
+    $sel.prop('disabled',true);
+    $status.text('Saving…').css('color','var(--muted)');
+    post({action:'bs_admin_set_user_branch',user_id:uid,branch_id:bid}).then(function(res){
+        $sel.prop('disabled',false);
+        if(res && res.success){
+            $sel.data('prev-value',bid);
+            $status.text('Saved').css('color','var(--green,#2a7a3b)');
+            setTimeout(function(){ $status.text(''); },1800);
+        } else {
+            $sel.val(prev);
+            $status.text((res && res.data)?res.data:'Save failed').css('color','var(--red,#c0392b)');
+        }
+    }).fail(function(){
+        $sel.prop('disabled',false).val(prev);
+        $status.text('Network error').css('color','var(--red,#c0392b)');
+    });
+});
 });
