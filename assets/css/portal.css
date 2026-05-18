@@ -129,3 +129,23 @@
 .bsp-profile-grid .bsp-input{height:42px;line-height:1.2}
 .bsp-profile-grid textarea.bsp-input{height:auto;min-height:64px}
 @media(max-width:500px){.bsp-profile-grid{grid-template-columns:1fr}}
+
+
+/* ── Portal popup modal ─────────────────────────── */
+.bs-portal-trigger-wrap{display:flex;justify-content:center;padding:12px 0}
+.bsp-portal-open{font-family:'DM Sans',sans-serif}
+body.bsp-modal-open{overflow:hidden}
+.bsp-modal{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px 12px}
+.bsp-modal[hidden]{display:none!important}
+.bsp-modal-backdrop{position:absolute;inset:0;background:rgba(26,18,8,.55);backdrop-filter:blur(3px);cursor:pointer}
+.bsp-modal-dialog{position:relative;background:#fdf8f0;border-radius:16px;width:100%;max-width:880px;max-height:92vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.35);animation:bspModalIn .22s ease-out}
+.bsp-modal-dialog .bs-portal-wrap{max-width:100%;padding:24px 22px}
+.bsp-modal-close{position:absolute;top:10px;right:14px;background:none;border:none;font-size:1.8rem;line-height:1;color:#8a7a65;cursor:pointer;z-index:2;padding:4px 10px;border-radius:50%;transition:.15s}
+.bsp-modal-close:hover{background:rgba(0,0,0,.06);color:#1a1208}
+@keyframes bspModalIn{from{transform:translateY(12px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+@media(max-width:600px){
+    .bsp-modal{padding:0}
+    .bsp-modal-dialog{border-radius:0;max-height:100vh;height:100vh}
+}
+/* Inside the modal the login card should not need extra vertical centering height */
+.bsp-modal-dialog .bsp-login-wrap{min-height:auto;padding:8px 0}
