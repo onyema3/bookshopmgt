@@ -98,3 +98,24 @@
 .bs-report-card h3{font-family:'Playfair Display',serif;font-size:1rem;margin-bottom:12px}
 .bs-report-card:first-child{grid-column:1/-1}
 .bs-report-card:nth-child(2){grid-column:1/-1}
+
+
+/* Per-branch stock badges in the Add/Edit Book modal.
+   .bs-bf-low  → qty is at or below the book's low_stock_threshold (amber)
+   .bs-bf-out  → qty is exactly 0 (red)
+   The classes are toggled by applyBranchStockBadges() in admin.js as
+   the manager types, so the warning follows the value live. */
+.bs-f-branch-stock-list .bs-bf-qty.bs-bf-low,
+#bs-f-branch-stock-list .bs-bf-qty.bs-bf-low{
+    border-color:#e67e22 !important;
+    background:#fff7ec;
+    color:#a85a14;
+    font-weight:600;
+}
+.bs-f-branch-stock-list .bs-bf-qty.bs-bf-out,
+#bs-f-branch-stock-list .bs-bf-qty.bs-bf-out{
+    border-color:var(--red,#c0392b) !important;
+    background:#fdecec;
+    color:var(--red,#c0392b);
+    font-weight:700;
+}

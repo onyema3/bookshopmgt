@@ -124,6 +124,20 @@ add_action('wp_ajax_bs_get_book_branches', function() {
         return;
     }
 
+    // Per-row threshold lets the JS colour low/out-of-stock inputs without
+    // needing a second round-trip. We pull it once from the book row (it's
+    // a property of the catalogue entry, not the per-branch stock row) and
+    // attach it to every branch row in the response. For brand-new books
+    // (book_id=0) we use the same default the form picks, 5, so the JS can
+    // still warn when a manager seeds a row at 0 or 1.
+    $threshold = 5;
+    if ( $book_id ) {
+        $t = $wpdb->get_var($wpdb->prepare(
+            "SELECT low_stock_threshold FROM {$wpdb->prefix}bookshop_books WHERE id=%d",
+            $book_id));
+        if ( $t !== null ) $threshold = max(0, intval($t));
+    }
+
     $rows = [];
     foreach ( $allowed as $b ) {
         $qty = $book_id
@@ -132,9 +146,10 @@ add_action('wp_ajax_bs_get_book_branches', function() {
                 intval($b->id), $book_id)))
             : 0;
         $rows[] = [
-            'id'   => intval($b->id),
-            'name' => $b->name,
-            'qty'  => $qty,
+            'id'        => intval($b->id),
+            'name'      => $b->name,
+            'qty'       => $qty,
+            'threshold' => $threshold,
         ];
     }
 
@@ -144,7 +159,11 @@ add_action('wp_ajax_bs_get_book_branches', function() {
         if ( $book ) $global = intval($book->stock_qty);
     }
 
-    wp_send_json_success(['branches' => $rows, 'global' => $global]);
+    wp_send_json_success([
+        'branches'  => $rows,
+        'global'    => $global,
+        'threshold' => $threshold,
+    ]);
 });
 
 // ── Admin: Get single book ────────────────────────────────────────────────────

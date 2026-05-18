@@ -365,11 +365,16 @@ function loadBookBranches(bookId){
             return;
         }
         var rows = res.data.branches.map(function(b){
+            // We tag the input with the current threshold so the click
+            // handler on #bs-f-threshold can re-evaluate every row's
+            // colour without a re-render.
             return ''
                 + '<div class="bs-bf-row" style="display:flex;align-items:center;gap:10px">'
                 +   '<label style="flex:1;font-weight:500;font-size:.88rem;color:var(--ink);margin:0">'+escapeHtml(b.name)+'</label>'
                 +   '<input type="number" min="0" class="bs-input bs-bf-qty" '
-                +     'data-branch-id="'+b.id+'" value="'+parseInt(b.qty,10)+'" '
+                +     'data-branch-id="'+b.id+'" '
+                +     'data-threshold="'+parseInt(b.threshold,10)+'" '
+                +     'value="'+parseInt(b.qty,10)+'" '
                 +     'style="width:90px;padding:6px 8px;font-size:.88rem">'
                 + '</div>';
         }).join('');
@@ -381,6 +386,33 @@ function loadBookBranches(bookId){
         $('#bs-f-stock-label').text('Stock Qty (auto from branches)');
         $('#bs-f-stock').prop('readonly',true).css('background','#f5efe4');
         recalcBranchStockTotal();
+        // Initial colouring after the rows are in the DOM.
+        applyBranchStockBadges();
+    });
+}
+
+// Apply low / out-of-stock colouring to every per-branch input. Called
+// after render, on input changes (recalcBranchStockTotal), and when the
+// global low-stock threshold field changes.
+//
+// The threshold is read from each input's data-threshold attribute,
+// preferring the value of #bs-f-threshold when it differs — so a manager
+// who changes the threshold in the form sees the per-branch warnings
+// move with it, before saving.
+function applyBranchStockBadges(){
+    var override = parseInt($('#bs-f-threshold').val(), 10);
+    if(isNaN(override) || override < 0) override = null;
+    $('#bs-f-branch-stock-list .bs-bf-qty').each(function(){
+        var qty       = Math.max(0, parseInt($(this).val(),10) || 0);
+        var rowThr    = parseInt($(this).attr('data-threshold'),10);
+        if(isNaN(rowThr)) rowThr = 5;
+        var threshold = (override !== null) ? override : rowThr;
+        $(this).removeClass('bs-bf-low bs-bf-out');
+        if(qty === 0){
+            $(this).addClass('bs-bf-out');
+        } else if(threshold > 0 && qty <= threshold){
+            $(this).addClass('bs-bf-low');
+        }
     });
 }
 
@@ -391,8 +423,14 @@ function recalcBranchStockTotal(){
     });
     $('#bs-f-branch-stock-total').text('Total across branches: '+sum);
     $('#bs-f-stock').val(sum);
+    // Re-colour any input whose qty just crossed the threshold or zero.
+    applyBranchStockBadges();
 }
 $(document).on('input','.bs-bf-qty',recalcBranchStockTotal);
+// Re-colour when the manager changes the global threshold field.
+// Done as `input` so a paste / arrow-up / typing each tick the
+// per-branch warnings without waiting for blur.
+$(document).on('input','#bs-f-threshold',applyBranchStockBadges);
 
 // Tiny HTML escaper for branch names that might contain quotes/&/<.
 function escapeHtml(str){
