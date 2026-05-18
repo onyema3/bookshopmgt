@@ -126,12 +126,17 @@ add_action('wp_ajax_bs_save_settings',function(){
 // Staff pin management
 add_action('wp_ajax_bs_set_pin',function(){
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
-    if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce');
+    if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce — refresh the page and try again');
     $uid=intval($_POST['user_id']??0);
     $pin=sanitize_text_field($_POST['pin']??'');
-    if(!$uid||strlen($pin)<4) wp_send_json_error('Invalid PIN');
+    if(!$uid) wp_send_json_error('Missing user');
+    // Match the login-side regex (bs_handle_pin_login). Without this, a
+    // non-numeric PIN would save fine here but be rejected at login —
+    // looking from the admin side as if "the PIN didn't save".
+    if(!preg_match('/^[0-9]{4,8}$/',$pin)) wp_send_json_error('PIN must be 4–8 digits (numbers only)');
     update_user_meta($uid,'bookshop_pin',wp_hash_password($pin));
-    wp_send_json_success();
+    bs_audit('pin_set','user',$uid,'POS PIN updated');
+    wp_send_json_success(['message'=>'PIN saved']);
 });
 add_action('wp_ajax_bs_pin_login','bs_handle_pin_login');
 add_action('wp_ajax_nopriv_bs_pin_login','bs_handle_pin_login');
