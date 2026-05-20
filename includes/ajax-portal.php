@@ -4,6 +4,27 @@
  */
 if(!defined('ABSPATH'))exit;
 
+// ── Helper: set the portal-token cookie with maximum cross-host reliability ──
+// Uses path=/ explicitly (avoids COOKIEPATH issues on subdir installs),
+// SameSite=Lax (modern browser requirement), and detects HTTPS from home_url
+// rather than is_ssl() to avoid mismatches behind reverse proxies.
+function bs_portal_set_cookie($token, $expires){
+    $secure = (parse_url(home_url(), PHP_URL_SCHEME) === 'https');
+    if (PHP_VERSION_ID >= 70300) {
+        setcookie('bs_portal_token', $token, [
+            'expires'  => $expires,
+            'path'     => '/',
+            'domain'   => '',
+            'secure'   => $secure,
+            'httponly' => false, // false so JS can also read/clear it as a fallback
+            'samesite' => 'Lax',
+        ]);
+    } else {
+        // PHP <7.3 fallback — use the path hack to set SameSite
+        setcookie('bs_portal_token', $token, $expires, '/; SameSite=Lax', '', $secure, false);
+    }
+}
+
 // ── Login — find customer by phone or email ────────────────────────────────────
 add_action('wp_ajax_nopriv_bs_portal_login','bs_portal_login_handler');
 add_action('wp_ajax_bs_portal_login','bs_portal_login_handler');
@@ -12,19 +33,24 @@ function bs_portal_login_handler(){
     $identifier=sanitize_text_field($_POST['identifier']??'');
     if(empty($identifier)) wp_send_json_error('Please enter your phone or email');
     global $wpdb;
-    // Search by phone or email
+    // Search by phone or email (trim whitespace, exact match on both fields)
+    $identifier = trim($identifier);
     $customer=$wpdb->get_row($wpdb->prepare(
         "SELECT * FROM {$wpdb->prefix}bookshop_customers
-         WHERE status='active' AND (phone=%s OR email=%s) LIMIT 1",
-        $identifier, $identifier
+         WHERE status='active' AND (phone=%s OR email=%s OR LOWER(email)=LOWER(%s)) LIMIT 1",
+        $identifier, $identifier, $identifier
     ));
     if(!$customer) wp_send_json_error('No account found with that phone or email. Please ask staff to register you in-store.');
     // Generate a secure token and store in transient keyed by that token
     $token=bin2hex(random_bytes(16));
     set_transient('bs_portal_customer_'.$token, $customer->id, HOUR_IN_SECONDS*8);
-    // Set cookie so the token persists across page reloads
-    setcookie('bs_portal_token', $token, time()+HOUR_IN_SECONDS*8, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true);
-    wp_send_json_success(['name'=>$customer->name,'id'=>$customer->id]);
+    // Set cookie via PHP — JS will also set it client-side as a fallback
+    bs_portal_set_cookie($token, time()+HOUR_IN_SECONDS*8);
+    wp_send_json_success([
+        'name'  => $customer->name,
+        'id'    => $customer->id,
+        'token' => $token, // returned so JS can set the cookie too
+    ]);
 }
 
 // ── Logout ────────────────────────────────────────────────────────────────────
@@ -33,7 +59,7 @@ add_action('wp_ajax_bs_portal_logout','bs_portal_logout_handler');
 function bs_portal_logout_handler(){
     $token=$_COOKIE['bs_portal_token']??'';
     if($token) delete_transient('bs_portal_customer_'.$token);
-    setcookie('bs_portal_token', '', time()-3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true);
+    bs_portal_set_cookie('', time()-3600);
     wp_send_json_success();
 }
 

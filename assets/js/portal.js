@@ -44,11 +44,25 @@
         $.post(ajax,{action:'bs_portal_login',nonce:nonce,identifier:id},function(res){
             btn.prop('disabled',false).text('Access My Account');
             if(res.success){
-                // Reload page to show dashboard
-                window.location.reload();
+                // Belt-and-suspenders: also set the cookie client-side in case
+                // the PHP setcookie() got dropped by a proxy or SSL mismatch.
+                if(res.data && res.data.token){
+                    var d=new Date(); d.setTime(d.getTime()+8*60*60*1000);
+                    document.cookie='bs_portal_token='+res.data.token+
+                        '; expires='+d.toUTCString()+
+                        '; path=/; SameSite=Lax'+
+                        (location.protocol==='https:'?'; Secure':'');
+                }
+                // Reload with a cache-busting query param so page-cache plugins
+                // can't serve the pre-login HTML.
+                var sep = location.search ? '&' : '?';
+                location.href = location.pathname + location.search + sep + 'bsp=' + Date.now() + location.hash;
             } else {
                 showMsg('#bsp-login-msg',res.data||'Not found','error');
             }
+        }).fail(function(xhr){
+            btn.prop('disabled',false).text('Access My Account');
+            showMsg('#bsp-login-msg','Network error ('+xhr.status+'). Please try again.','error');
         });
     });
     // Allow Enter key on identifier field
@@ -58,9 +72,12 @@
 
     // ── Logout ────────────────────────────────────────────────────────────────
     $(document).on('click','#bsp-logout',function(){
+        // Clear cookie client-side first so even if the AJAX call fails, the
+        // user gets logged out from the browser's perspective.
+        document.cookie='bs_portal_token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax';
         $.post(ajax,{action:'bs_portal_logout',nonce:nonce},function(){
             window.location.reload();
-        });
+        }).fail(function(){ window.location.reload(); });
     });
 
     // ── Save Profile ──────────────────────────────────────────────────────────
