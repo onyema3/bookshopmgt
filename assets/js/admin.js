@@ -519,6 +519,204 @@ $('#bs-import-woo-btn').on('click',function(){
     });
 });
 
+// ── Books: Bulk operations ────────────────────────────────────
+//
+// Selection lives in a Set so it survives filter hide/show — a user can
+// search "fiction", select 12 rows, change the search to "history", select
+// 8 more, and clear-search to see all 20 still selected. The header
+// select-all checkbox only operates on currently-visible rows so the user
+// can't accidentally tick books they can't see.
+//
+// Apply button routes to one of three modals (price / genre / archive-or-
+// restore), each of which handles validation locally before POSTing. On
+// success we reload — the selection set is implicitly cleared, which is
+// what you want after a destructive op anyway.
+const bulkSelected = new Set();
+
+function bulkRefreshBar(){
+    const n = bulkSelected.size;
+    $('#bs-bulk-bar').toggle(n > 0);
+    $('#bs-bulk-count').text(n + ' selected');
+    // Sync the header select-all to a tristate based on visible rows: all
+    // visible-and-checked → checked; some → indeterminate; none → unchecked.
+    const $visible = $('#bs-books-table tbody tr:visible');
+    const visIds = $visible.map(function(){ return parseInt($(this).data('id')); }).get();
+    const visChecked = visIds.filter(id => bulkSelected.has(id));
+    const $all = $('#bs-select-all');
+    if (visIds.length === 0) {
+        $all.prop({checked: false, indeterminate: false});
+    } else if (visChecked.length === visIds.length) {
+        $all.prop({checked: true, indeterminate: false});
+    } else if (visChecked.length === 0) {
+        $all.prop({checked: false, indeterminate: false});
+    } else {
+        $all.prop({checked: false, indeterminate: true});
+    }
+}
+
+// Per-row checkbox change
+$(document).on('change','.bs-row-select',function(){
+    const id = parseInt($(this).data('id'));
+    if (this.checked) bulkSelected.add(id); else bulkSelected.delete(id);
+    bulkRefreshBar();
+});
+
+// Header "select all visible" — only acts on rows the filter currently shows
+$(document).on('change','#bs-select-all',function(){
+    const want = this.checked;
+    $('#bs-books-table tbody tr:visible .bs-row-select').each(function(){
+        const id = parseInt($(this).data('id'));
+        if (want) bulkSelected.add(id); else bulkSelected.delete(id);
+        $(this).prop('checked', want);
+    });
+    bulkRefreshBar();
+});
+
+// Re-sync the header tri-state whenever the filter hides/shows rows. The
+// existing filterBooks() doesn't fire an event, so wrap it.
+const _origFilterBooks = typeof filterBooks === 'function' ? filterBooks : null;
+if (_origFilterBooks) {
+    // Can't rebind freely since filterBooks is hoisted local; instead listen
+    // to the same triggers and refresh the bar after.
+    $('#bs-book-search,#bs-genre-filter,#bs-status-filter').on('input change', function(){
+        // filterBooks already ran (registered on these events); next tick is
+        // fine because we only need post-filter visibility state.
+        setTimeout(bulkRefreshBar, 0);
+    });
+    $('#bs-low-stock-filter').on('change', function(){ setTimeout(bulkRefreshBar, 0); });
+}
+
+// Clear selection
+$(document).on('click','#bs-bulk-clear',function(e){
+    e.preventDefault();
+    bulkSelected.clear();
+    $('.bs-row-select').prop('checked', false);
+    bulkRefreshBar();
+});
+
+// Apply button → route to the right modal
+$(document).on('click','#bs-bulk-apply',function(){
+    if (bulkSelected.size === 0) { alert('Select at least one book.'); return; }
+    const action = $('#bs-bulk-action').val();
+    if (!action) { alert('Choose a bulk action first.'); return; }
+    if (action === 'price') {
+        $('#bs-bulk-price-count').text(bulkSelected.size + ' selected book' + (bulkSelected.size === 1 ? '' : 's'));
+        $('#bs-bulk-pct').val('');
+        $('#bs-bulk-also-cost').prop('checked', false);
+        $('#bs-bulk-round').val('cent');
+        openModal('#bs-bulk-price-modal');
+    } else if (action === 'rename_genre') {
+        $('#bs-bulk-genre-count').text(bulkSelected.size + ' selected book' + (bulkSelected.size === 1 ? '' : 's'));
+        $('#bs-bulk-genre-to').val('');
+        openModal('#bs-bulk-genre-modal');
+    } else if (action === 'archive' || action === 'restore') {
+        const archiving = action === 'archive';
+        const verb = archiving ? 'archive' : 'restore';
+        const titles = [];
+        $('#bs-books-table tbody tr').each(function(){
+            const id = parseInt($(this).data('id'));
+            if (bulkSelected.has(id)) {
+                // Pull the title cell — first column after checkbox + cover is
+                // Title/Author. Use the data-title (already-lowercased) for
+                // the count modal; for display we want the visible cell.
+                const t = $(this).find('td').eq(2).find('strong').text() || ('Book #' + id);
+                titles.push(t);
+            }
+        });
+        $('#bs-bulk-status-modal .bs-modal-header h2').text(archiving ? 'Bulk: Archive Books' : 'Bulk: Restore Books');
+        $('#bs-bulk-status-verb').text(verb);
+        $('#bs-bulk-status-count').text(bulkSelected.size);
+        $('#bs-bulk-status-plural').toggle(bulkSelected.size !== 1);
+        $('#bs-bulk-status-titles').html(titles.map(t => '• ' + esc(t)).join('<br>'));
+        $('#bs-bulk-status-apply').text(archiving ? 'Archive ' + bulkSelected.size : 'Restore ' + bulkSelected.size)
+                                  .data('target-status', archiving ? 'inactive' : 'active');
+        openModal('#bs-bulk-status-modal');
+    }
+});
+
+// Price-change apply — server validates the percentage range too, but we
+// pre-validate here so the modal stays open with focus on the bad field.
+$(document).on('click','#bs-bulk-price-apply',function(){
+    const pctRaw = $('#bs-bulk-pct').val().trim();
+    if (pctRaw === '' || isNaN(parseFloat(pctRaw))) {
+        alert('Enter a percentage like 10 or -5.');
+        $('#bs-bulk-pct').focus();
+        return;
+    }
+    const pct = parseFloat(pctRaw);
+    if (pct === 0) { alert('A 0% change would be a no-op.'); return; }
+    if (pct <= -100 || pct >= 1000) { alert('Percentage must be between -100 and 1000.'); return; }
+    const $btn = $(this).prop('disabled', true).text('Applying…');
+    post({
+        action:    'bs_bulk_price_change',
+        ids:       JSON.stringify(Array.from(bulkSelected)),
+        pct:       pct,
+        also_cost: $('#bs-bulk-also-cost').is(':checked') ? 1 : 0,
+        rounding:  $('#bs-bulk-round').val(),
+    }).done(function(res){
+        $btn.prop('disabled', false).text('Apply');
+        if (res && res.success) {
+            alert(res.data.message || 'Done.');
+            location.reload();
+        } else {
+            alert('Failed: ' + ((res && res.data) ? res.data : 'Unknown error'));
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled', false).text('Apply');
+        alert('Request failed (' + xhr.status + ').');
+    });
+});
+
+// Rename-genre apply
+$(document).on('click','#bs-bulk-genre-apply',function(){
+    const to = $('#bs-bulk-genre-to').val().trim();
+    if (to.length > 100) { alert('Genre must be 100 characters or fewer.'); return; }
+    // Empty target is allowed (clears genre) — but make the user confirm,
+    // since it's a destructive choice and easy to do by accident.
+    if (to === '' && !confirm('Clear the genre on these books? They will show up under "All Genres" with no category.')) return;
+    const $btn = $(this).prop('disabled', true).text('Renaming…');
+    post({
+        action:   'bs_bulk_rename_genre',
+        ids:      JSON.stringify(Array.from(bulkSelected)),
+        to_genre: to,
+    }).done(function(res){
+        $btn.prop('disabled', false).text('Rename');
+        if (res && res.success) {
+            alert(res.data.message || 'Done.');
+            location.reload();
+        } else {
+            alert('Failed: ' + ((res && res.data) ? res.data : 'Unknown error'));
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled', false).text('Rename');
+        alert('Request failed (' + xhr.status + ').');
+    });
+});
+
+// Archive / restore apply (one button, status data-attr decides direction)
+$(document).on('click','#bs-bulk-status-apply',function(){
+    const status = $(this).data('target-status') || 'inactive';
+    const $btn = $(this).prop('disabled', true).text('Working…');
+    post({
+        action: 'bs_bulk_set_status',
+        ids:    JSON.stringify(Array.from(bulkSelected)),
+        status: status,
+    }).done(function(res){
+        $btn.prop('disabled', false);
+        if (res && res.success) {
+            alert(res.data.message || 'Done.');
+            location.reload();
+        } else {
+            alert('Failed: ' + ((res && res.data) ? res.data : 'Unknown error'));
+            // Restore button text on failure (otherwise it stays "Working…")
+            $btn.text(status === 'inactive' ? 'Archive ' + bulkSelected.size : 'Restore ' + bulkSelected.size);
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled', false).text('Confirm');
+        alert('Request failed (' + xhr.status + ').');
+    });
+});
+
 // ── Sales: View items ─────────────────────────────────────────
 $(document).on('click','.bs-view-sale-items',function(){
     const id=$(this).data('id'),ref=$(this).data('ref');
