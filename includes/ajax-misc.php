@@ -59,8 +59,29 @@ add_action('wp_ajax_bs_update_reservation',function(){
     global $wpdb;
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce');
-    $status=sanitize_text_field($_POST['status']??'');
-    $wpdb->update("{$wpdb->prefix}bookshop_reservations",['status'=>$status],['id'=>intval($_POST['id'])]);
+    $id     = intval($_POST['id'] ?? 0);
+    $status = sanitize_text_field($_POST['status'] ?? '');
+    if(!$id || !$status) wp_send_json_error('Missing id/status');
+
+    // Read the row first so we can detect the transition into 'notified'
+    // and fire an SMS to the customer (book ready for collection). Without
+    // this lookup we'd either spam SMS on every status save or miss the
+    // notification entirely if the column was already 'notified' from a
+    // prior save.
+    $reservation = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}bookshop_reservations WHERE id=%d", $id));
+    if(!$reservation) wp_send_json_error('Reservation not found');
+
+    $wpdb->update("{$wpdb->prefix}bookshop_reservations",['status'=>$status],['id'=>$id]);
+
+    if($status === 'notified' && $reservation->status !== 'notified'
+       && function_exists('bs_send_reservation_ready_sms')){
+        // Reflect the new status on the row we pass downstream so the SMS
+        // copy can rely on $reservation->status if it ever needs to.
+        $reservation->status = 'notified';
+        bs_send_reservation_ready_sms($reservation);
+    }
+
     wp_send_json_success();
 });
 
@@ -91,6 +112,10 @@ add_action('wp_ajax_bs_save_settings',function(){
         'bookshop_smtp_enabled','bookshop_smtp_host','bookshop_smtp_port',
         'bookshop_smtp_encryption','bookshop_smtp_auth','bookshop_smtp_username',
         'bookshop_smtp_from_email','bookshop_smtp_from_name',
+        // SMS — public fields. Provider tokens / Twilio token handled in
+        // secret_fields below so a blank submission keeps the saved value.
+        'bookshop_sms_enabled','bookshop_sms_provider','bookshop_sms_sender_id',
+        'bookshop_sms_default_country','bookshop_sms_twilio_sid','bookshop_sms_twilio_from',
         // Payment gateways — public keys
         'bookshop_paystack_public_key',
         'bookshop_flutterwave_public_key',
@@ -109,6 +134,11 @@ add_action('wp_ajax_bs_save_settings',function(){
         'bookshop_paystack_secret_key',
         'bookshop_flutterwave_secret_key',
         'bookshop_smtp_password',
+        // SMS provider credentials — same secret semantics: blank submission
+        // keeps the previously stored value rather than overwriting with empty.
+        'bookshop_sms_bsn_api_token',
+        'bookshop_sms_termii_api_key',
+        'bookshop_sms_twilio_token',
     ];
     foreach($secret_fields as $f){
         if(isset($_POST[$f]) && !empty($_POST[$f])){

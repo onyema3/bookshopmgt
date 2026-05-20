@@ -455,6 +455,17 @@ function bs_install_v3_tables(){
         'bookshop_smtp_password'          =>'',
         'bookshop_smtp_from_email'        =>'',
         'bookshop_smtp_from_name'         =>'',
+        // SMS — disabled by default; admin opts in via the settings page.
+        // BulkSMSNigeria is the recommended default for ₦ deliverability.
+        'bookshop_sms_enabled'            =>'0',
+        'bookshop_sms_provider'           =>'bulksmsnigeria',
+        'bookshop_sms_sender_id'          =>'',
+        'bookshop_sms_default_country'    =>'234',
+        'bookshop_sms_bsn_api_token'      =>'',
+        'bookshop_sms_termii_api_key'     =>'',
+        'bookshop_sms_twilio_sid'         =>'',
+        'bookshop_sms_twilio_token'       =>'',
+        'bookshop_sms_twilio_from'        =>'',
     ];
     foreach($defaults as $k=>$v){ if(get_option($k)===false) update_option($k,$v); }
 

@@ -92,6 +92,16 @@ function bs_update_online_order_status($id,$status){
     // Notify the customer on every real status transition
     bs_notify_online_order_status_change($id,$status,$order->status);
 
+    // Fire a generic action so any other channel (SMS, push, WhatsApp) can
+    // hook in without modifying the email path. Re-fetch the row so
+    // subscribers see the post-update state (payment_gateway/payment_amount
+    // may have just been stamped above for offline confirmations).
+    $updated_order = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$id));
+    if($updated_order){
+        do_action('bs_online_order_status_changed', $updated_order, $status, $order->status);
+    }
+
     return['ok'=>true,'status'=>$status];
 }
 
@@ -261,6 +271,26 @@ function bs_notify_online_order_status_change($order_id,$status,$prev_status='')
         $html,
         ['Content-Type: text/html; charset=UTF-8']
     );
+}
+
+/**
+ * Companion SMS for status changes. Runs after the email send so it doesn't
+ * affect the email return value, and quietly no-ops when SMS is disabled,
+ * the customer didn't leave a phone, or the status has no SMS copy ('pending').
+ *
+ * Hooked rather than inlined so future channels (push, WhatsApp Cloud API)
+ * can subscribe to the same action without further changes here.
+ */
+add_action('bs_online_order_status_changed', 'bs_notify_online_order_status_change_sms', 10, 3);
+function bs_notify_online_order_status_change_sms($order, $status, $prev_status){
+    if(!is_object($order)) return;
+    if(empty($order->customer_phone)) return;
+    if(!function_exists('bs_send_sms') || !function_exists('bs_sms_enabled')) return;
+    if(!bs_sms_enabled()) return;
+    $body = function_exists('bs_sms_online_order_body')
+            ? bs_sms_online_order_body($order, $status) : '';
+    if(!$body) return;
+    bs_send_sms($order->customer_phone, $body, 'order_status:'.$status);
 }
 
 // ── Shortcode: Book Catalogue ─────────────────────────────────────────────────
