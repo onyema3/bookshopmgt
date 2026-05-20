@@ -12,6 +12,26 @@ add_action('template_redirect',function(){
     exit;
 });
 
+// ── Reprint route — admin re-printing a past sale ───────────────────────────
+// Hits ?bookshop_print_receipt=1&sale_id=N. Renders an isolated, printable
+// receipt page using the same pos-print.css the live POS print window uses,
+// so a duplicate receipt looks identical to the original. Auto-prints on
+// load so the cashier just clicks the link.
+//
+// Capability: bs_user_can_manage. Pure POS staff don't need to bypass the
+// regular post-sale print path — if they want a duplicate at the till
+// they can void+resell, which is the existing audit-friendly path. Manager+
+// reprint is for the "customer came back next week" case where voiding
+// would distort yesterday's reports.
+add_action('template_redirect', function(){
+    if (empty($_GET['bookshop_print_receipt'])) return;
+    if (!bs_user_can_manage()) wp_die('Unauthorized', 'Access Denied', ['response' => 403]);
+    $sale_id = intval($_GET['sale_id'] ?? 0);
+    if (!$sale_id) wp_die('Missing sale_id', 'Bad Request', ['response' => 400]);
+    bs_render_printable_receipt($sale_id);
+    exit;
+});
+
 function bs_render_pos(){
     $user   =wp_get_current_user();
     $nonce  =wp_create_nonce('bs_pos_nonce');
@@ -556,6 +576,19 @@ if(!is_user_logged_in()): ?>
                     <button onclick="newSale()"
                         style="flex:1;background:var(--ink);color:var(--amber-l);border:none;padding:9px;border-radius:8px;cursor:pointer;font-family:var(--fh);font-weight:600">New Sale</button>
                 </div>
+                <!-- Pair Bluetooth printer — hidden by default; the JS shows it
+                     only when the browser supports Web Bluetooth (Chrome/Edge
+                     desktop, Chrome Android). On supported browsers, pairing
+                     once changes the Print button's behaviour from "open OS
+                     print dialog" to "send ESC/POS bytes directly," which is
+                     dramatically faster on cheap thermal printers. -->
+                <div id="bs-printer-pair-row" style="display:none;margin-top:6px;display:flex;gap:6px;align-items:center;font-size:.78rem">
+                    <button id="btn-pair-printer" type="button"
+                        style="background:#fff;border:1.5px solid var(--border);padding:6px 12px;border-radius:6px;cursor:pointer;font-family:var(--fb)">
+                        🔗 Pair Bluetooth printer
+                    </button>
+                    <span id="bs-printer-status" style="color:var(--muted);flex:1"></span>
+                </div>
             </div>
         </div>
     </div>
@@ -577,9 +610,25 @@ const TAX_MODE='<?=esc_js(get_option('bookshop_tax_mode','none'))?>';
 const TAX_RATE=<?=floatval(get_option('bookshop_tax_rate',0))/100?>;
 const TAX_LABEL='<?=esc_js(get_option('bookshop_tax_label','VAT'))?>';
 
+// Receipt paper width in mm. 80 is the thermal-printer default; 58 is for
+// portable printers. Read from a wp_option so a shop can switch by setting
+// it via wp-cli or DB without waiting for a settings UI:
+//     wp option update bookshop_receipt_paper_width 58
+// The CSS file flips layout based on body[data-paper-width] and the
+// ESC/POS bridge uses this number for column widths.
+const PAPER_WIDTH=<?=intval(get_option('bookshop_receipt_paper_width',80))===58?58:80?>;
+const PRINT_CSS_URL='<?=esc_url(BOOKSHOP_URL.'assets/css/pos-print.css?v='.BOOKSHOP_VERSION)?>';
+const SHOP_ADDRESS='<?=esc_js($address)?>';
+const SHOP_PHONE='<?=esc_js($phone)?>';
+const STAFF_NAME='<?=esc_js($user->display_name)?>';
+
 // FIX: all IDs stored as numbers for consistent === comparison
 let cart=[], customer=null, payment='cash', promoDisc=0, promoCode='', promoName='';
 let searchTimer, custTimer, currentSaleId=0, currentSaleCart=[];
+// Stashed copy of the last sale's server response. Used by the Bluetooth
+// print bridge to pick up loyalty_earned + other server-computed fields
+// that aren't in the on-screen modal markup. Cleared on newSale().
+let lastReceiptData=null;
 <?php $shift_id_init = $shift ? intval($shift->id) : 0; ?>
 let shiftId=<?=$shift_id_init?>;
 let currentTotal=0;
@@ -1099,6 +1148,11 @@ function submitSale(){
 
 // ── Receipt ───────────────────────────────────────────────────
 function showReceipt(data){
+    // Stash for the Bluetooth print path — loyalty_earned and other
+    // server-computed fields aren't in the modal DOM but the bridge wants
+    // them in the receipt payload.
+    lastReceiptData = data;
+
     const {sub,manDisc,redeemVal,tax}=calcTotals();
     const tendered=parseFloat(document.getElementById('tendered').value)||0;
     const change=tendered>0?tendered-currentTotal:0;
@@ -1192,50 +1246,188 @@ function showReceipt(data){
 }
 
 // ── Print Receipt ──────────────────────────────────────────────
-// We open a dedicated print window and let the browser paginate normally,
-// because the previous in-page approach used position:fixed; inset:0 which
-// clipped the receipt to a single viewport-height — long carts (10+ items)
-// printed only the first page. A standalone window with the receipt as its
-// only content prints all pages on every browser, including thermal
-// printers in 80mm mode.
-window.printReceipt=function(){
-    const content=document.getElementById('printable-receipt').innerHTML;
-    const w=window.open('','bs_receipt_print','width=420,height=640');
-    if(!w){alert('Please allow pop-ups to print the receipt.');return;}
-    // Build a minimal, isolated document. No theme CSS, no plugin CSS —
-    // only what the receipt needs. @page rules give the printer a thermal
-    // 80mm hint without breaking A4 fallback.
+//
+// Two paths, picked at click time:
+//   1. Web Bluetooth ESC/POS bridge — preferred when paired. Encodes the
+//      receipt into ESC/POS bytes and writes them directly to the printer
+//      over BLE. Sub-second on Android, no print dialog, no paper-size
+//      gymnastics.
+//   2. Print window — universal fallback. Opens an isolated window with
+//      just the receipt HTML and links to assets/css/pos-print.css. Works
+//      on every browser, including Safari and Firefox where Web Bluetooth
+//      isn't available, and on every printer including USB / network
+//      thermals that the OS already knows about.
+//
+// We try (1), and on any failure (provider rejection, characteristic
+// dropped between pairing and print, encoding error) fall back to (2)
+// rather than leaving the user staring at a stuck dialog.
+window.printReceipt = function () {
+    var bridge = window.BSESCPOS;
+    if (bridge && bridge.isPaired()) {
+        try {
+            bridge.print(collectReceiptForBridge()).then(function () {
+                // No UI flash needed — the printer's own buzzer/cut is the
+                // confirmation. We do refresh the status line so the cashier
+                // can see the last-printed timestamp at a glance.
+                setPrinterStatus('✓ Sent to ' + (bridge.deviceName() || 'printer'));
+            }).catch(function (err) {
+                console.warn('Bluetooth print failed, falling back to print dialog:', err);
+                setPrinterStatus('Bluetooth print failed: ' + (err && err.message ? err.message : 'unknown error') + '. Used the print dialog instead.', true);
+                printViaWindow();
+            });
+            return;
+        } catch (e) {
+            console.warn('Bluetooth bridge threw, falling back:', e);
+        }
+    }
+    printViaWindow();
+};
+
+// Build the structured receipt object the bridge wants. Most fields are
+// already in JS state (currentSaleCart, customer, payment, etc.); we just
+// reformat them and pre-format currency so the bridge doesn't have to
+// know about NGN vs other locales.
+function collectReceiptForBridge() {
+    var totals = calcTotals();
+    var tendered = parseFloat(document.getElementById('tendered').value) || 0;
+    var change = tendered > 0 ? tendered - currentTotal : 0;
+    return {
+        paperWidth:    PAPER_WIDTH,
+        shop:          SHOP,
+        address:       SHOP_ADDRESS,
+        phone:         SHOP_PHONE,
+        ref:           document.getElementById('r-ref').textContent || '',
+        date:          document.getElementById('r-date').textContent || '',
+        staff:         STAFF_NAME,
+        customer:      customer ? customer.name : 'Walk-in',
+        payment:       payment.toUpperCase(),
+        items: currentSaleCart.map(function (c) {
+            return {
+                title: c.title,
+                qty:   c.qty,
+                price: CUR + fmt(c.price),
+                total: CUR + fmt(c.price * c.qty),
+            };
+        }),
+        subtotal:      CUR + fmt(totals.sub),
+        discount:      totals.manDisc > 0 ? CUR + fmt(totals.manDisc) : '',
+        promo:         promoDisc > 0       ? CUR + fmt(promoDisc) : '',
+        tax:           totals.tax > 0      ? CUR + fmt(totals.tax) : '',
+        taxLabel:      TAX_LABEL + (TAX_MODE === 'inclusive' ? ' (incl)' : ''),
+        total:         CUR + fmt(currentTotal),
+        tendered:      (payment === 'cash' && tendered > 0) ? CUR + fmt(tendered) : '',
+        change:        (payment === 'cash' && tendered > 0) ? CUR + fmt(Math.abs(change)) : '',
+        loyaltyEarned: lastReceiptData && lastReceiptData.loyalty_earned ? lastReceiptData.loyalty_earned : 0,
+        footer:        RECEIPT_FOOTER,
+    };
+}
+
+// Print-window fallback. Replaces the previous inline-CSS approach with a
+// <link> to assets/css/pos-print.css so designers can iterate on print
+// styling without touching JS, and so reprint (?bookshop_print_receipt=1)
+// shares the exact same stylesheet.
+function printViaWindow() {
+    var content = document.getElementById('printable-receipt').innerHTML;
+    var w = window.open('', 'bs_receipt_print', 'width=420,height=640');
+    if (!w) { alert('Please allow pop-ups to print the receipt.'); return; }
     w.document.open();
     w.document.write(
-        '<!DOCTYPE html><html><head><meta charset="UTF-8">'
-        +'<title>Receipt</title>'
-        +'<style>'
-        +'  @page{size:80mm auto;margin:4mm}'
-        +'  *{box-sizing:border-box}'
-        +'  html,body{margin:0;padding:0;background:#fff;color:#000;'
-        +'    font-family:"Courier New",monospace;font-size:11pt;line-height:1.35}'
-        +'  body{padding:6px}'
-        +'  /* Remove any width caps the cloned markup brings with it. */'
-        +'  body *{max-width:none !important}'
-        +'  img{max-height:60px;display:block;margin:0 auto 6px}'
-        +'  /* Avoid splitting an item line across pages. */'
-        +'  #r-items > div{page-break-inside:avoid;break-inside:avoid}'
-        +'  /* Hide on-screen-only controls if they slipped through. */'
-        +'  .no-print{display:none !important}'
-        +'</style>'
-        +'</head><body>'+content+'</body></html>'
+        '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<title>Receipt</title>' +
+        '<link rel="stylesheet" href="' + PRINT_CSS_URL + '">' +
+        '</head><body data-paper-width="' + PAPER_WIDTH + '">' +
+        '<div id="printable-receipt">' + content + '</div>' +
+        '</body></html>'
     );
     w.document.close();
-    // Wait for layout/images, then print. Some browsers fire load synchronously
-    // for blank docs; setTimeout makes Safari/Firefox happy too.
-    var doPrint=function(){try{w.focus();w.print();}catch(e){}
-        // Close after the print dialog returns. Leave a small delay so the
-        // dialog has time to render before we close the window.
-        setTimeout(function(){try{w.close();}catch(e){}},500);
+    var doPrint = function () {
+        try { w.focus(); w.print(); } catch (e) {}
+        // Brief delay so the print dialog has a beat to render before
+        // we close the window from under it.
+        setTimeout(function () { try { w.close(); } catch (e) {} }, 500);
     };
-    if(w.document.readyState==='complete'){setTimeout(doPrint,150);}
-    else{w.addEventListener('load',doPrint);setTimeout(doPrint,800);}
-};
+    if (w.document.readyState === 'complete') {
+        // Wait for the linked stylesheet to load before printing — without
+        // this, Safari sometimes prints before the CSS applies and you
+        // get the unstyled receipt. Fall back to an absolute timeout.
+        setTimeout(doPrint, 250);
+    } else {
+        w.addEventListener('load', doPrint);
+        setTimeout(doPrint, 1200); // hard fallback
+    }
+}
+
+// ── Bluetooth pairing UI ─────────────────────────────────────────────────
+// Show the Pair button only when Web Bluetooth is supported in this
+// browser. The status line below it tracks pairing state — gives the
+// cashier feedback that "yes, you're connected" without an extra click.
+function setPrinterStatus(msg, isError) {
+    var el = document.getElementById('bs-printer-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? '#c0392b' : 'var(--muted)';
+}
+
+function refreshPairButton() {
+    var btn = document.getElementById('btn-pair-printer');
+    var row = document.getElementById('bs-printer-pair-row');
+    if (!btn || !row) return;
+    var bridge = window.BSESCPOS;
+    if (!bridge || !bridge.isSupported()) {
+        row.style.display = 'none';
+        return;
+    }
+    row.style.display = 'flex';
+    if (bridge.isPaired()) {
+        btn.textContent = '✓ Paired: ' + (bridge.deviceName() || 'printer');
+        btn.title = 'Click to disconnect this printer';
+        setPrinterStatus('Print sends straight to the printer (no dialog)');
+    } else {
+        btn.textContent = '🔗 Pair Bluetooth printer';
+        btn.title = 'Pair a thermal printer for one-tap printing (Chrome/Edge only)';
+        setPrinterStatus('');
+    }
+}
+
+document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'btn-pair-printer') {
+        var bridge = window.BSESCPOS;
+        if (!bridge) return;
+        var btn = e.target;
+        if (bridge.isPaired()) {
+            // Second click = disconnect. Confirm so an accidental double-tap
+            // doesn't drop the connection mid-shift.
+            if (!confirm('Disconnect this printer?')) return;
+            bridge.disconnect();
+            refreshPairButton();
+            return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Pairing…';
+        bridge.pair().then(function (info) {
+            setPrinterStatus('Connected to ' + (info.name || 'printer') + '. Print sends directly from now on.');
+            refreshPairButton();
+        }).catch(function (err) {
+            // NotFoundError is just "user cancelled the picker" — not an error.
+            if (err && err.name === 'NotFoundError') {
+                refreshPairButton();
+                return;
+            }
+            setPrinterStatus('Pairing failed: ' + (err && err.message ? err.message : 'unknown error'), true);
+            refreshPairButton();
+        }).finally(function () {
+            btn.disabled = false;
+        });
+    }
+});
+
+// Hook the bridge's connect/disconnect events so the button + status line
+// reflect auto-reconnect on page load and accidental disconnects mid-shift.
+if (window.BSESCPOS) {
+    BSESCPOS.on('connect',    refreshPairButton);
+    BSESCPOS.on('disconnect', refreshPairButton);
+    refreshPairButton();
+}
 window.sendEmailReceipt=function(){
     const email=document.getElementById('r-email').value.trim();
     if(!email)return;
@@ -1246,6 +1438,7 @@ window.sendEmailReceipt=function(){
 window.newSale=function(){
     document.getElementById('receipt-modal').style.display='none';
     cart=[];customer=null;promoDisc=0;promoCode='';promoName='';currentTotal=0;
+    lastReceiptData=null;
     // Reset all inputs
     document.getElementById('cust-search').value='';
     document.getElementById('cust-loyalty-info').style.display='none';
@@ -1421,7 +1614,135 @@ document.getElementById('pos-shift-info').textContent='Shift open since <?=esc_j
 <?php endif; ?>
 })();
 </script>
+<!-- Web Bluetooth ESC/POS bridge — exposes window.BSESCPOS for the print
+     handler above. Loaded last so the script tag's IIFE has a chance to
+     register the listeners and (on Chrome 92+) silently auto-reconnect to
+     a previously paired printer before the cashier needs it. -->
+<script src="<?=esc_url(BOOKSHOP_URL.'assets/js/escpos-bridge.js?v='.BOOKSHOP_VERSION)?>"></script>
 </body>
 </html>
 <?php
+}
+
+
+/**
+ * Render a printable receipt for a past sale.
+ *
+ * Output is an isolated HTML document that links to assets/css/pos-print.css
+ * (same stylesheet the live POS print window uses) and auto-fires
+ * window.print() on load. Closing the print dialog leaves the user looking
+ * at a clean on-screen preview thanks to the @media screen rules in the CSS.
+ *
+ * Currency / formatting decisions deliberately match what the live receipt
+ * shows — same bs_fmt(), same date format, same labels — so a reprint is
+ * literally indistinguishable from the original.
+ */
+function bs_render_printable_receipt($sale_id){
+    $sale  = bs_get_sale(intval($sale_id));
+    if (!$sale) wp_die('Sale not found', 'Not Found', ['response' => 404]);
+
+    $items    = bs_get_sale_items($sale->id);
+    $customer = $sale->customer_id ? bs_get_customer($sale->customer_id) : null;
+
+    $shop     = get_option('bookshop_receipt_header', get_bloginfo('name'));
+    $tagline  = get_option('bookshop_tagline', '');
+    $address  = get_option('bookshop_address', '');
+    $phone    = get_option('bookshop_phone', '');
+    $logo     = get_option('bookshop_logo_url', '');
+    $footer   = get_option('bookshop_receipt_footer', 'Thank you for shopping with us!');
+    $tax_lbl  = get_option('bookshop_tax_label', 'VAT');
+    $paper    = intval(get_option('bookshop_receipt_paper_width', 80)) === 58 ? 58 : 80;
+
+    $css_url  = esc_url(BOOKSHOP_URL . 'assets/css/pos-print.css?v=' . BOOKSHOP_VERSION);
+    $auto_print = empty($_GET['no_print']); // ?no_print=1 disables auto-fire for proofreading
+
+    // The escapes below are deliberately straightforward — this template is
+    // small enough that helper functions would obscure the layout. Every
+    // dynamic value passes through esc_html / nl2br(esc_html) / bs_fmt.
+    ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Receipt <?=esc_html($sale->sale_ref)?></title>
+<link rel="stylesheet" href="<?=$css_url?>">
+</head>
+<body data-paper-width="<?=$paper?>">
+    <div class="bsr">
+        <?php if ($logo): ?>
+        <img src="<?=esc_url($logo)?>" alt="">
+        <?php endif; ?>
+
+        <div class="bsr-shop"><?=esc_html($shop)?></div>
+        <?php if ($tagline): ?><div class="bsr-tagline"><?=esc_html($tagline)?></div><?php endif; ?>
+        <?php if ($address): ?><div class="bsr-address"><?=nl2br(esc_html($address))?></div><?php endif; ?>
+        <?php if ($phone):   ?><div class="bsr-phone">Tel: <?=esc_html($phone)?></div><?php endif; ?>
+
+        <div style="text-align:center;font-size:9pt;margin-top:4pt;font-weight:700">★ DUPLICATE RECEIPT ★</div>
+
+        <hr class="bsr-divider">
+        <div class="bsr-meta">
+            <div class="bsr-meta-row"><span>Ref:</span><strong><?=esc_html($sale->sale_ref)?></strong></div>
+            <div class="bsr-meta-row"><span>Date:</span><span><?=esc_html(wp_date('d M Y H:i', strtotime($sale->created_at)))?></span></div>
+            <?php if (!empty($sale->staff_name)): ?>
+            <div class="bsr-meta-row"><span>Staff:</span><span><?=esc_html($sale->staff_name)?></span></div>
+            <?php endif; ?>
+            <div class="bsr-meta-row"><span>Customer:</span><span><?=esc_html($customer ? $customer->name : 'Walk-in')?></span></div>
+            <div class="bsr-meta-row"><span>Payment:</span><span><?=esc_html(strtoupper($sale->payment_method))?></span></div>
+        </div>
+
+        <hr class="bsr-divider">
+        <div class="bsr-items">
+            <?php foreach ($items as $it): ?>
+            <div class="bsr-item">
+                <div class="bsr-item-line">
+                    <div class="bsr-item-title"><?=esc_html($it->title)?></div>
+                    <div class="bsr-item-meta"><?=intval($it->qty)?> @ <?=bs_fmt($it->unit_price)?></div>
+                </div>
+                <div class="bsr-item-amt"><?=bs_fmt($it->line_total)?></div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+
+        <hr class="bsr-divider">
+        <div class="bsr-totals">
+            <div class="bsr-meta-row"><span>Subtotal</span><span><?=bs_fmt($sale->subtotal)?></span></div>
+            <?php if ($sale->discount > 0): ?>
+            <div class="bsr-meta-row"><span>Discount</span><span>-<?=bs_fmt($sale->discount)?></span></div>
+            <?php endif; ?>
+            <?php if ($sale->promo_discount > 0): ?>
+            <div class="bsr-meta-row"><span>Promo</span><span>-<?=bs_fmt($sale->promo_discount)?></span></div>
+            <?php endif; ?>
+            <?php if ($sale->tax > 0): ?>
+            <div class="bsr-meta-row"><span><?=esc_html($tax_lbl)?></span><span><?=bs_fmt($sale->tax)?></span></div>
+            <?php endif; ?>
+            <div class="bsr-meta-row bsr-grand"><span>TOTAL</span><span><?=bs_fmt($sale->total)?></span></div>
+        </div>
+
+        <?php if ($sale->loyalty_earned > 0): ?>
+        <hr class="bsr-divider">
+        <div style="text-align:center;font-size:9pt">+<?=intval($sale->loyalty_earned)?> loyalty points earned</div>
+        <?php endif; ?>
+
+        <hr class="bsr-divider">
+        <div class="bsr-foot"><?=esc_html($footer)?></div>
+        <div style="text-align:center;font-size:8pt;color:#666;margin-top:4pt">Powered by Bookshop Manager Pro</div>
+
+        <div class="bsr-cut">- - - - - - - - - - - - - - -</div>
+    </div>
+
+    <?php if ($auto_print): ?>
+    <script>
+    // Auto-print on load, but wait long enough for the linked stylesheet
+    // to apply — Safari occasionally fires window.print() before CSS lays
+    // out and you get unstyled output. The hard fallback timeout means
+    // even a slow CSS load still triggers eventually.
+    window.addEventListener('load', function () {
+        setTimeout(function () { try { window.print(); } catch (e) {} }, 400);
+    });
+    </script>
+    <?php endif; ?>
+</body>
+</html>
+    <?php
 }
