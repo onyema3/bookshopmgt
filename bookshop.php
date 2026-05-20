@@ -64,6 +64,7 @@ require_once BOOKSHOP_DIR . 'includes/modules/payments-online.php';
 require_once BOOKSHOP_DIR . 'includes/modules/rest-api.php';
 require_once BOOKSHOP_DIR . 'includes/modules/online-store.php';
 require_once BOOKSHOP_DIR . 'includes/modules/backup.php';
+require_once BOOKSHOP_DIR . 'includes/modules/smtp.php';
 
 // New modules — v3
 require_once BOOKSHOP_DIR . 'includes/modules/eod-report.php';
@@ -85,6 +86,7 @@ register_deactivation_hook( __FILE__, 'bookshop_deactivate' );
 
 function bookshop_deactivate() {
     wp_clear_scheduled_hook('bookshop_daily_tasks');
+    wp_clear_scheduled_hook('bookshop_hourly');
 }
 
 add_action( 'bookshop_daily_tasks', 'bookshop_run_daily_tasks' );
@@ -94,4 +96,21 @@ function bookshop_run_daily_tasks() {
 }
 if ( ! wp_next_scheduled('bookshop_daily_tasks') ) {
     wp_schedule_event( time(), 'daily', 'bookshop_daily_tasks' );
+}
+
+// Custom hourly schedule. Used by the EOD time-of-day check (and any future
+// feature that needs sub-daily ticks). WordPress ships an 'hourly' schedule
+// out of the box, but registering our own keyed name makes it easy to spot
+// in the cron-listing tools admins use to debug missed events.
+add_filter('cron_schedules', function ($schedules) {
+    if ( ! isset($schedules['bookshop_hourly']) ) {
+        $schedules['bookshop_hourly'] = [
+            'interval' => HOUR_IN_SECONDS,
+            'display'  => 'Bookshop — once per hour',
+        ];
+    }
+    return $schedules;
+});
+if ( ! wp_next_scheduled('bookshop_hourly') ) {
+    wp_schedule_event( time(), 'bookshop_hourly', 'bookshop_hourly' );
 }

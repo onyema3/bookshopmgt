@@ -1213,6 +1213,27 @@ $(document).on('click','#bs-send-eod-now',function(){
         alert(res.success?res.data.message:'Failed: '+(res.data||'Unknown error'));
     });
 });
+
+// SMTP test send. Posts the recipient (defaults to admin_email) and surfaces
+// the server-supplied error verbatim, since "wp_mail returned false" alone
+// tells the admin nothing about whether it's auth, port, encryption, etc.
+$(document).on('click','#bs-smtp-test',function(){
+    var to = $('#bs-smtp-test-to').val().trim();
+    if(!to){ alert('Enter a recipient email first.'); return; }
+    var $btn = $(this).prop('disabled',true).text('Sending…');
+    var $out = $('#bs-smtp-test-result').html('<span style="color:var(--muted)">Sending…</span>');
+    post({action:'bs_smtp_test', to:to}).done(function(res){
+        $btn.prop('disabled',false).text('📤 Send Test Email');
+        if(res && res.success){
+            $out.html('<span style="color:var(--green,#2a7a3b)">✓ '+esc(res.data.message)+'</span>');
+        } else {
+            $out.html('<span style="color:var(--red,#c0392b)">✗ '+esc((res&&res.data)?res.data:'Unknown error')+'</span>');
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled',false).text('📤 Send Test Email');
+        $out.html('<span style="color:var(--red,#c0392b)">✗ HTTP '+xhr.status+' — try saving settings first.</span>');
+    });
+});
 $(document).on('click','#bs-run-expiry',function(){
     if(!confirm('Run loyalty points expiry now? This will expire points for inactive customers.')) return;
     var btn=$(this).prop('disabled',true).text('Running…');

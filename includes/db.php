@@ -441,9 +441,20 @@ function bs_install_v3_tables(){
     // New options
     $defaults=[
         'bookshop_eod_email'              =>get_option('admin_email'),
+        'bookshop_eod_send_hour'          =>7,
         'bookshop_loyalty_expiry_months'  =>0,
         'bookshop_ip_whitelist'           =>'',
         'bookshop_drift_digest_email'     =>get_option('admin_email'),
+        // SMTP — disabled by default; admin opts in via the settings page.
+        'bookshop_smtp_enabled'           =>'0',
+        'bookshop_smtp_host'              =>'',
+        'bookshop_smtp_port'              =>587,
+        'bookshop_smtp_encryption'        =>'tls',
+        'bookshop_smtp_auth'              =>'1',
+        'bookshop_smtp_username'          =>'',
+        'bookshop_smtp_password'          =>'',
+        'bookshop_smtp_from_email'        =>'',
+        'bookshop_smtp_from_name'         =>'',
     ];
     foreach($defaults as $k=>$v){ if(get_option($k)===false) update_option($k,$v); }
 

@@ -86,7 +86,11 @@ add_action('wp_ajax_bs_save_settings',function(){
         'bookshop_loyalty_expiry_months',
         // Operations
         'bookshop_low_stock_email','bookshop_whatsapp','bookshop_manager_discount_threshold',
-        'bookshop_eod_email',
+        'bookshop_eod_email','bookshop_eod_send_hour',
+        // SMTP — public fields (host/port/etc.). Password handled separately.
+        'bookshop_smtp_enabled','bookshop_smtp_host','bookshop_smtp_port',
+        'bookshop_smtp_encryption','bookshop_smtp_auth','bookshop_smtp_username',
+        'bookshop_smtp_from_email','bookshop_smtp_from_name',
         // Payment gateways — public keys
         'bookshop_paystack_public_key',
         'bookshop_flutterwave_public_key',
@@ -104,6 +108,7 @@ add_action('wp_ajax_bs_save_settings',function(){
     $secret_fields = [
         'bookshop_paystack_secret_key',
         'bookshop_flutterwave_secret_key',
+        'bookshop_smtp_password',
     ];
     foreach($secret_fields as $f){
         if(isset($_POST[$f]) && !empty($_POST[$f])){
