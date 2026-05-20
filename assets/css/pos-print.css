@@ -1,0 +1,259 @@
+/*
+ * Receipt print stylesheet — used by:
+ *   - the POS receipt-modal "Print" button (window opened by printReceipt())
+ *   - the reprint route (?bookshop_print_receipt=1&sale_id=N)
+ *
+ * Why a dedicated stylesheet rather than inline CSS in the JS string we used
+ * before: the receipt template kept growing (tax line, tendered/change, ₦
+ * fallback, footer, cut hint), and pinning all of that inside a JS string
+ * made it harder to tweak per-shop. Externalising lets a manager who can
+ * SFTP-edit a CSS file change the look without touching JS.
+ *
+ * Two paper widths supported:
+ *   80mm (default)        — the standard thermal receipt printer width;
+ *                           giving 48 monospace columns at our font size.
+ *   58mm  via             — the smaller portable printers; 32 columns.
+ *     <body data-paper-width="58">
+ *
+ * The 80mm/58mm switch is set on <body> by whoever opens the print window.
+ * @page rules adapt the page size accordingly so the printer's auto-feed
+ * advances the right amount per page.
+ */
+
+/* ── Page setup ──────────────────────────────────────────────────────────── */
+@page {
+    size: 80mm auto;
+    margin: 4mm 3mm;
+}
+body[data-paper-width="58"] {
+    /* Override the @page for narrow rolls. Browsers honour this for the
+       active document — printers ignore the size hint and feed continuously,
+       which is what we want for thermal anyway. */
+}
+@media print {
+    body[data-paper-width="58"] { page: small; }
+    @page small {
+        size: 58mm auto;
+        margin: 3mm 2mm;
+    }
+}
+
+/* ── Reset + base ────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    color: #000;
+    /* Courier first because it's literally everywhere; the others are
+       fallbacks for environments that ship a thinner monospace. */
+    font-family: "Courier New", "Lucida Console", "Consolas", monospace;
+    /* 11pt is the sweet spot for thermal printers — large enough to read
+       without a magnifying glass at arm's length, small enough that a
+       10-line cart doesn't push the total to a second receipt strip. */
+    font-size: 11pt;
+    line-height: 1.35;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}
+body { padding: 6px; }
+body[data-paper-width="58"] { font-size: 9pt; line-height: 1.3; padding: 4px; }
+
+/* Strip every width cap the cloned modal markup might bring with it. The
+   on-screen receipt is constrained to 380px; we don't want that here. */
+body * { max-width: none !important; }
+
+/* Anything explicitly marked no-print stays out of the print output even if
+   it sneaks into the cloned subtree. */
+.no-print { display: none !important; }
+
+/* ── Logo ────────────────────────────────────────────────────────────────── */
+img {
+    max-height: 60px;
+    display: block;
+    margin: 0 auto 6px;
+}
+body[data-paper-width="58"] img { max-height: 40px; }
+
+/* ── Receipt structure ───────────────────────────────────────────────────── */
+/* The on-screen markup uses inline styles for layout; print mode strips
+   most of that with these overrides so the receipt looks tabular and stays
+   aligned even when the on-screen flexbox would have rounded a column off
+   pixel-by-pixel. */
+
+/* Centre the shop header block. The on-screen version already does this
+   inline, but a dedicated rule means a future redesign can drop the inline
+   styles without breaking print. */
+#printable-receipt > div:first-child,
+#printable-receipt > div:nth-child(2) {
+    text-align: center;
+}
+
+/* Dotted dividers — thermal-receipt convention. Thinner and less ink-heavy
+   than solid hairlines. Honour the inline border-top:1px dashed too. */
+#printable-receipt hr,
+#printable-receipt > div[style*="border-top"] {
+    border: none !important;
+    border-top: 1px dashed #000 !important;
+    margin: 6pt 0 !important;
+    height: 0 !important;
+}
+
+/* Item rows. The cloned markup has a flex layout; we keep that for column
+   alignment but make sure neither column truncates with ellipsis when
+   printing — wrapping is fine, ellipsis means an admin reading a returned
+   receipt can't tell what was bought. */
+#r-items > div {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+    padding: 2pt 0 !important;
+    /* Keep an item line and its meta sub-line on the same page. */
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+#r-items > div > span:first-child {
+    flex: 1 1 auto;
+    overflow: visible !important;
+    white-space: normal !important;
+}
+#r-items > div > span:last-child {
+    flex: 0 0 auto;
+    white-space: nowrap !important;
+    font-weight: 700;
+}
+
+/* Totals block — the inline style on the modal already gives us the layout;
+   we just want the TOTAL line to stand out a hair more in print. */
+#printable-receipt strong { font-weight: 700; }
+
+/* Loyalty/footer block — small grey on screen, but small black in print
+   because grey often comes out as illegible dither on cheap thermal heads. */
+#r-loyalty,
+#printable-receipt > div[style*="font-style:italic"],
+#printable-receipt > div[style*="color:#bbb"] {
+    color: #000 !important;
+    text-align: center !important;
+}
+
+/* "Powered by …" — keep it but shrink so it's clearly a footer. */
+#printable-receipt > div:last-child {
+    font-size: 8pt;
+    margin-top: 4pt;
+    color: #444 !important;
+}
+
+/* ── Reprint route specifics ──────────────────────────────────────────────
+   The bookshop_print_receipt route renders a slightly different DOM (no
+   modal chrome, full-page receipt for previewing on screen too). It uses a
+   .bsr-* prefix so the rules don't collide with the cloned-modal selectors
+   above. */
+
+.bsr {
+    max-width: 74mm;
+    margin: 0 auto;
+}
+body[data-paper-width="58"] .bsr { max-width: 54mm; }
+
+.bsr-shop {
+    text-align: center;
+    font-size: 13pt;
+    font-weight: 700;
+    margin-bottom: 2pt;
+}
+.bsr-tagline,
+.bsr-address,
+.bsr-phone {
+    text-align: center;
+    font-size: 9pt;
+    line-height: 1.25;
+    margin: 0;
+}
+.bsr-divider {
+    border: none;
+    border-top: 1px dashed #000;
+    margin: 6pt 0;
+    height: 0;
+}
+.bsr-meta {
+    font-size: 9.5pt;
+}
+.bsr-meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 1pt 0;
+}
+.bsr-items {
+    margin: 4pt 0;
+}
+.bsr-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 1pt 0;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.bsr-item-line {
+    flex: 1 1 auto;
+}
+.bsr-item-title {
+    font-weight: 700;
+}
+.bsr-item-meta {
+    font-size: 8.5pt;
+    color: #333;
+}
+.bsr-item-amt {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-weight: 700;
+}
+.bsr-totals .bsr-meta-row {
+    padding: 1.5pt 0;
+}
+.bsr-grand {
+    font-size: 13pt;
+    font-weight: 700;
+    border-top: 1px solid #000;
+    padding-top: 3pt;
+    margin-top: 3pt;
+}
+.bsr-foot {
+    text-align: center;
+    font-size: 9pt;
+    margin-top: 8pt;
+    font-style: italic;
+}
+.bsr-cut {
+    /* Visual cut-line marker for printers without auto-cut: pure cosmetic
+       on auto-cut printers, helpful otherwise. Forced to avoid breaking
+       across pages — losing the cut marker mid-feed isn't useful. */
+    text-align: center;
+    font-family: "Courier New", monospace;
+    font-size: 8pt;
+    color: #666;
+    margin: 8pt 0 0;
+    letter-spacing: 4pt;
+    page-break-inside: avoid;
+    break-inside: avoid;
+}
+.bsr-cut::before { content: "✂ "; }
+
+/* ── Screen preview (so the reprint route renders something readable
+       even before the user clicks Print). Optional. ──────────────────── */
+@media screen {
+    body {
+        background: #f0e8d8;
+        padding: 24px;
+    }
+    .bsr {
+        background: #fff;
+        padding: 16px 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, .1);
+        border-radius: 6px;
+    }
+    .bsr-cut { display: none; } /* on-screen the marker is just noise */
+}

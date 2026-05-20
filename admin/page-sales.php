@@ -60,6 +60,7 @@ function bs_page_sales(){
             <td><strong><?=bs_fmt($s->total)?></strong></td>
             <td>
                 <button class="bs-btn-link bs-view-sale-items" data-id="<?=esc_attr($s->id)?>" data-ref="<?=esc_attr($s->sale_ref)?>">Items</button>
+                <a class="bs-btn-link" href="<?=esc_url(home_url('/?bookshop_print_receipt=1&sale_id='.intval($s->id)))?>" target="_blank" rel="noopener" title="Open a printable duplicate receipt for this sale" style="color:#1565c0">Print</a>
                 <button class="bs-btn-link bs-refund-sale" data-id="<?=esc_attr($s->id)?>" data-ref="<?=esc_attr($s->sale_ref)?>" style="color:#e67e22">Refund</button>
                 <button class="bs-btn-link bs-void-sale" data-id="<?=esc_attr($s->id)?>" style="color:#c0392b">Void</button>
             </td>
