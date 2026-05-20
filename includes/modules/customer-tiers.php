@@ -75,11 +75,16 @@ function bs_send_birthday_discounts(){
 }
 add_action('bookshop_daily_tasks','bs_send_birthday_discounts');
 
-// Segment customers
+// Segment customers — combines POS sales activity and online-order activity
+// so customers reachable only through the online catalogue still show up in
+// messaging recipient lists.
 function bs_segment_customers($genre='',$days=180,$min_spend=0){
     global $wpdb;
     $since=date('Y-m-d',strtotime("-{$days} days"));
     if($genre){
+        // Genre filter relies on bookshop_sale_items + bookshop_books, which
+        // online orders (items stored as JSON) cannot join against. POS sales
+        // remain the only source for genre-specific segmentation.
         return $wpdb->get_results($wpdb->prepare(
             "SELECT DISTINCT c.* FROM {$wpdb->prefix}bookshop_customers c
              JOIN {$wpdb->prefix}bookshop_sales s ON s.customer_id=c.id
@@ -88,11 +93,28 @@ function bs_segment_customers($genre='',$days=180,$min_spend=0){
              WHERE c.status='active' AND DATE(s.created_at)>=%s AND b.genre=%s",
             $since,$genre));
     }
+    // Aggregate spend across both surfaces. A customer qualifies if they have
+    // any qualifying activity (sales OR online orders) in the time window.
     return $wpdb->get_results($wpdb->prepare(
-        "SELECT c.*, SUM(s.total) AS total_spend FROM {$wpdb->prefix}bookshop_customers c
-         JOIN {$wpdb->prefix}bookshop_sales s ON s.customer_id=c.id
-         WHERE c.status='active' AND DATE(s.created_at)>=%s
-         GROUP BY c.id HAVING total_spend>=%s ORDER BY total_spend DESC",
-        $since,floatval($min_spend)));
+        "SELECT c.*,
+                COALESCE(s.spend, 0) + COALESCE(o.spend, 0) AS total_spend
+         FROM {$wpdb->prefix}bookshop_customers c
+         LEFT JOIN (
+             SELECT customer_id, SUM(total) AS spend
+             FROM {$wpdb->prefix}bookshop_sales
+             WHERE customer_id IS NOT NULL AND DATE(created_at) >= %s
+             GROUP BY customer_id
+         ) s ON s.customer_id = c.id
+         LEFT JOIN (
+             SELECT customer_id, SUM(total) AS spend
+             FROM {$wpdb->prefix}bookshop_online_orders
+             WHERE customer_id IS NOT NULL AND DATE(created_at) >= %s
+             GROUP BY customer_id
+         ) o ON o.customer_id = c.id
+         WHERE c.status = 'active'
+           AND (s.customer_id IS NOT NULL OR o.customer_id IS NOT NULL)
+           AND COALESCE(s.spend, 0) + COALESCE(o.spend, 0) >= %f
+         ORDER BY total_spend DESC",
+        $since, $since, floatval($min_spend)));
 }
 
