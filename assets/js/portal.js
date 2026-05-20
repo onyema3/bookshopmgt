@@ -84,34 +84,182 @@
         $('#'+tab).show();
     });
 
-    // ── Login ────────────────────────────────────────────────────────────────
-    $(document).on('click','#bsp-login-btn',function(){
-        var id=$('#bsp-identifier').val().trim();
-        if(!id){showMsg('#bsp-login-msg','Please enter your phone or email','error');return;}
-        var btn=$(this).prop('disabled',true).text('Checking…');
-        $.post(ajax,{action:'bs_portal_login',nonce:nonce,identifier:id},function(res){
-            btn.prop('disabled',false).text('Access My Account');
-            if(res.success && res.data && res.data.token){
-                // Persist session locally
-                setSession(res.data.token, res.data.name);
-                // Update the trigger button text immediately
-                $('#bsp-portal-open').text(res.data.name);
-                // Swap modal contents to the dashboard HTML the server rendered.
-                // No page reload — bypasses page caching and cookie-not-persisting issues entirely.
-                if (res.data.html) {
-                    $('#bs-portal').html(res.data.html);
-                }
-            } else {
-                showMsg('#bsp-login-msg',res.data||'Not found','error');
+    // ── Login (two-step OTP) ─────────────────────────────────────────────────
+    //
+    // Step 1: identifier (phone/email) -> server sends a 6-digit code by email
+    //         or SMS, returns an opaque otp_id.
+    // Step 2: user enters the code, server verifies and returns the dashboard
+    //         HTML + token. Same swap-modal-without-reload flow as before.
+    //
+    // We hold the typed identifier in lastIdentifier across step 2 so the
+    // resend button can re-trigger step 1 without making the user re-type it.
+    var lastIdentifier = '';
+    var resendTimer    = null;
+
+    function showStep1(){
+        $('#bsp-login-otp').hide();
+        $('#bsp-login').show();
+        $('#bsp-otp-msg,#bsp-login-msg').hide();
+        $('#bsp-otp-code').val('');
+        $('#bsp-otp-id').val('');
+        clearResendCooldown();
+        // Refocus the identifier so a single keystroke continues the flow.
+        setTimeout(function(){ $('#bsp-identifier').focus(); }, 30);
+    }
+
+    function showStep2(data){
+        $('#bsp-login').hide();
+        $('#bsp-login-otp').show();
+        $('#bsp-otp-msg,#bsp-login-msg').hide();
+        $('#bsp-otp-id').val(data.otp_id || '');
+
+        // Confirm where the code went without disclosing the full address —
+        // server already masked it, we just render. The channel word is for
+        // tone (people parse "email" / "SMS" faster than a masked address).
+        var label = data.channel === 'sms' ? 'SMS' : 'email';
+        $('#bsp-otp-destination').text('Code sent by ' + label + ' to ' + (data.destination || ''));
+
+        // Optional fallback note (e.g. typed phone but SMS not configured).
+        if(data.note){
+            $('#bsp-otp-note').text(data.note).show();
+        } else {
+            $('#bsp-otp-note').hide().text('');
+        }
+
+        // 30-second cooldown matches the server-side per-account throttle, so
+        // tapping resend at 5 seconds in won't even reach the network.
+        startResendCooldown(30);
+        // Focus the code input. On iOS/Android with autocomplete=one-time-code
+        // and the SMS arriving, the keyboard's autofill suggestion fires here.
+        setTimeout(function(){ $('#bsp-otp-code').focus(); }, 30);
+    }
+
+    function startResendCooldown(seconds){
+        clearResendCooldown();
+        var $link = $('#bsp-otp-resend');
+        var remaining = seconds;
+        $link.css({pointerEvents:'none', opacity:.5})
+             .text('Resend in ' + remaining + 's');
+        resendTimer = setInterval(function(){
+            remaining--;
+            if(remaining <= 0){
+                clearResendCooldown();
+                return;
             }
-        }).fail(function(xhr){
-            btn.prop('disabled',false).text('Access My Account');
-            showMsg('#bsp-login-msg','Network error ('+xhr.status+'). Please try again.','error');
+            $link.text('Resend in ' + remaining + 's');
+        }, 1000);
+    }
+    function clearResendCooldown(){
+        if(resendTimer){ clearInterval(resendTimer); resendTimer = null; }
+        $('#bsp-otp-resend').css({pointerEvents:'', opacity:''}).text('Resend code');
+    }
+
+    function requestOtp(identifier, onDone){
+        $.post(ajax, {action:'bs_portal_request_otp', nonce:nonce, identifier:identifier})
+         .done(function(res){
+            if(res && res.success && res.data && res.data.otp_id){
+                lastIdentifier = identifier;
+                onDone(null, res.data);
+            } else {
+                onDone((res && res.data) ? res.data : 'Could not send code', null);
+            }
+         })
+         .fail(function(xhr){
+            onDone('Network error (' + xhr.status + '). Please try again.', null);
+         });
+    }
+
+    // Step 1 submit
+    $(document).on('click','#bsp-request-otp-btn',function(){
+        var id = $('#bsp-identifier').val().trim();
+        if(!id){ showMsg('#bsp-login-msg','Please enter your phone or email','error'); return; }
+        var btn = $(this).prop('disabled', true).text('Sending code…');
+        requestOtp(id, function(err, data){
+            btn.prop('disabled', false).text('Send sign-in code');
+            if(err){ showMsg('#bsp-login-msg', err, 'error'); return; }
+            showStep2(data);
         });
     });
-    // Allow Enter key on identifier field
     $(document).on('keydown','#bsp-identifier',function(e){
-        if(e.key==='Enter') $('#bsp-login-btn').click();
+        if(e.key === 'Enter') $('#bsp-request-otp-btn').click();
+    });
+
+    // Step 2 submit
+    function submitVerify(){
+        var otpId = $('#bsp-otp-id').val();
+        var code  = $('#bsp-otp-code').val().replace(/\D+/g,'');
+        if(!otpId){ showMsg('#bsp-otp-msg','Please request a new code', 'error'); showStep1(); return; }
+        if(code.length !== 6){ showMsg('#bsp-otp-msg','Enter the 6-digit code', 'error'); return; }
+
+        var btn = $('#bsp-verify-otp-btn').prop('disabled', true).text('Verifying…');
+        $.post(ajax, {action:'bs_portal_verify_otp', nonce:nonce, otp_id:otpId, code:code})
+         .done(function(res){
+            btn.prop('disabled', false).text('Verify & sign in');
+            if(res && res.success && res.data && res.data.token){
+                setSession(res.data.token, res.data.name);
+                $('#bsp-portal-open').text(res.data.name);
+                if(res.data.html){ $('#bs-portal').html(res.data.html); }
+                clearResendCooldown();
+                lastIdentifier = '';
+                return;
+            }
+            showMsg('#bsp-otp-msg', (res && res.data) ? res.data : 'Verification failed', 'error');
+            // Server returned an error — clear the input so the user can retype
+            // rather than appending to a wrong code on the next keypress.
+            $('#bsp-otp-code').val('').focus();
+         })
+         .fail(function(xhr){
+            btn.prop('disabled', false).text('Verify & sign in');
+            showMsg('#bsp-otp-msg','Network error (' + xhr.status + '). Please try again.', 'error');
+         });
+    }
+    $(document).on('click','#bsp-verify-otp-btn', submitVerify);
+    $(document).on('keydown','#bsp-otp-code',function(e){
+        if(e.key === 'Enter') submitVerify();
+    });
+    // Auto-submit when 6 digits are present. The user will almost always have
+    // pasted from the SMS or autofilled — making them tap "Verify" after that
+    // adds a step for no reason. Still works fine for typed entry because the
+    // 6th keystroke triggers it. Strip non-digits first so paste of "123 456"
+    // also works.
+    $(document).on('input','#bsp-otp-code',function(){
+        var clean = $(this).val().replace(/\D+/g,'').slice(0,6);
+        if(clean !== $(this).val()) $(this).val(clean);
+        if(clean.length === 6) submitVerify();
+    });
+
+    // Resend — re-run step 1 with the remembered identifier. The 30s server-
+    // side cooldown will reject early clicks even if the JS timer somehow
+    // glitches; this is just a UX hint.
+    $(document).on('click','#bsp-otp-resend',function(e){
+        e.preventDefault();
+        if(!lastIdentifier){ showStep1(); return; }
+        // No-op if cooldown is still active (pointer-events:none above).
+        if($(this).css('pointer-events') === 'none') return;
+        var $link = $(this).text('Sending…');
+        requestOtp(lastIdentifier, function(err, data){
+            if(err){
+                showMsg('#bsp-otp-msg', err, 'error');
+                clearResendCooldown(); // re-enable so user can try again
+                return;
+            }
+            // Update otp_id and destination — the server may have routed
+            // the resend to a different channel if config changed.
+            $('#bsp-otp-id').val(data.otp_id || '');
+            var label = data.channel === 'sms' ? 'SMS' : 'email';
+            $('#bsp-otp-destination').text('Code sent by ' + label + ' to ' + (data.destination || ''));
+            if(data.note){ $('#bsp-otp-note').text(data.note).show(); } else { $('#bsp-otp-note').hide(); }
+            showMsg('#bsp-otp-msg','New code sent.','success');
+            $('#bsp-otp-code').val('').focus();
+            startResendCooldown(30);
+        });
+    });
+
+    // Back link — discard the in-flight OTP locally (server keeps it valid
+    // until expiry; that's fine — the user explicitly chose to start over).
+    $(document).on('click','#bsp-otp-back',function(e){
+        e.preventDefault();
+        showStep1();
     });
 
     // ── Logout ────────────────────────────────────────────────────────────────

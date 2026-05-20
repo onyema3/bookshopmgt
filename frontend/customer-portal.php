@@ -56,22 +56,63 @@ function bs_portal_shortcode($atts){
 
 // ── Portal login uses cookie-based token — no PHP session needed ──────────────
 
-// ── Login screen ──────────────────────────────────────────────────────────────
+// ── Login screen — two cards, JS toggles which is visible ─────────────────────
+//
+// Step 1 (#bsp-login):  identifier (phone/email) → "Send sign-in code"
+// Step 2 (#bsp-login-otp): 6-digit code → "Verify & sign in"
+//
+// Both are rendered server-side so the modal HTML is complete on first paint
+// (no flash of empty box while JS hydrates), and step 2 can be shown by the
+// dashboard-fetch path on a refresh-with-stale-cookie just as cleanly as by
+// the AJAX request_otp path. JS just toggles display + populates the
+// "Code sent to ..." line and the back-link.
 function bs_render_portal_login($title){
     ?>
-    <div class="bsp-login-wrap" id="bsp-login">
-        <div class="bsp-login-card">
+    <div class="bsp-login-wrap" id="bsp-login-wrap">
+
+        <!-- Step 1: identifier -->
+        <div class="bsp-login-card" id="bsp-login">
             <div class="bsp-login-icon">📚</div>
             <h2 class="bsp-login-title"><?=esc_html($title)?></h2>
-            <p class="bsp-login-sub">Enter your phone number or email to access your account</p>
+            <p class="bsp-login-sub">Enter your phone number or email to receive a sign-in code</p>
             <div class="bsp-field">
                 <label>Phone or Email</label>
-                <input type="text" id="bsp-identifier" placeholder="e.g. 08012345678 or you@email.com" autocomplete="tel">
+                <input type="text" id="bsp-identifier" placeholder="e.g. 08012345678 or you@email.com" autocomplete="username">
             </div>
-            <button class="bsp-btn bsp-btn-primary" id="bsp-login-btn">Access My Account</button>
+            <button class="bsp-btn bsp-btn-primary" id="bsp-request-otp-btn">Send sign-in code</button>
             <div id="bsp-login-msg" class="bsp-msg" style="display:none"></div>
             <p class="bsp-login-note">Don't have an account? Ask staff to register you in-store.</p>
         </div>
+
+        <!-- Step 2: OTP entry. Hidden until step 1 succeeds. -->
+        <div class="bsp-login-card" id="bsp-login-otp" style="display:none">
+            <div class="bsp-login-icon">🔐</div>
+            <h2 class="bsp-login-title">Enter your code</h2>
+            <p class="bsp-login-sub" id="bsp-otp-destination">
+                <!-- Filled by JS: "Code sent to j****@example.com" -->
+            </p>
+            <p class="bsp-login-note" id="bsp-otp-note" style="display:none;margin-top:-4px">
+                <!-- Filled by JS for fallback cases (e.g. SMS not configured → email) -->
+            </p>
+            <div class="bsp-field">
+                <label>6-digit code</label>
+                <input type="text" id="bsp-otp-code"
+                    inputmode="numeric" pattern="[0-9]*"
+                    maxlength="6" autocomplete="one-time-code"
+                    placeholder="000000"
+                    style="text-align:center;font-size:1.5rem;letter-spacing:.4em;font-family:Menlo,Consolas,monospace">
+            </div>
+            <input type="hidden" id="bsp-otp-id" value="">
+            <button class="bsp-btn bsp-btn-primary" id="bsp-verify-otp-btn">Verify &amp; sign in</button>
+            <div id="bsp-otp-msg" class="bsp-msg" style="display:none"></div>
+            <div style="display:flex;justify-content:space-between;margin-top:14px;font-size:.85rem">
+                <a href="#" id="bsp-otp-back"
+                    style="color:var(--bs-muted,#8a7a65);text-decoration:none">← Use a different account</a>
+                <a href="#" id="bsp-otp-resend"
+                    style="color:var(--bs-muted,#8a7a65);text-decoration:none">Resend code</a>
+            </div>
+        </div>
+
     </div>
     <?php
 }
