@@ -66,6 +66,10 @@ require_once BOOKSHOP_DIR . 'includes/modules/online-store.php';
 require_once BOOKSHOP_DIR . 'includes/modules/backup.php';
 require_once BOOKSHOP_DIR . 'includes/modules/smtp.php';
 require_once BOOKSHOP_DIR . 'includes/modules/sms.php';
+// staff-2fa.php depends on bs_portal_otp_* helpers from ajax-portal.php (loaded
+// further down). Load order is fine at runtime since the helper calls happen
+// on auth attempts, not at module load.
+require_once BOOKSHOP_DIR . 'includes/modules/staff-2fa.php';
 
 // New modules — v3
 require_once BOOKSHOP_DIR . 'includes/modules/eod-report.php';
