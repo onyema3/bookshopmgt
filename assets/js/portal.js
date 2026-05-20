@@ -116,11 +116,18 @@
 
     // ── Logout ────────────────────────────────────────────────────────────────
     $(document).on('click','#bsp-logout',function(){
-        // Clear local session immediately so the UI flips even if AJAX fails
-        clearSession();
-        authPost('bs_portal_logout').always(function(){
-            // Reload to reset the modal back to the login form
-            window.location.reload();
+        // Capture the token BEFORE clearing localStorage — the server needs it
+        // to know which transient to invalidate. authPost() reads from
+        // localStorage, so clearing first would send an empty token and the
+        // session would persist server-side.
+        var token = getToken();
+        $.post(ajax,{action:'bs_portal_logout', nonce:nonce, bsp_token:token}).always(function(){
+            // Now clear local session
+            clearSession();
+            // Reload with cache-bust to defeat page caches that might still
+            // have the logged-in HTML (with the customer's name on the button).
+            var sep = location.search ? '&' : '?';
+            location.href = location.pathname + location.search + sep + 'bsp_out=' + Date.now() + location.hash;
         });
     });
 
