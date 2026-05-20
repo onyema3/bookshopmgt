@@ -25,6 +25,21 @@ function bs_portal_set_cookie($token, $expires){
     }
 }
 
+// ── Helper: read the auth token from the request ──────────────────────────────
+// Checks POST['bsp_token'] first (so JS can pass it explicitly when cookies are
+// unreliable), falls back to the cookie. This makes auth fully cookie-independent.
+function bs_portal_get_request_token(){
+    if (!empty($_POST['bsp_token'])) return sanitize_text_field($_POST['bsp_token']);
+    if (!empty($_GET['bsp_token']))  return sanitize_text_field($_GET['bsp_token']);
+    return $_COOKIE['bs_portal_token'] ?? '';
+}
+
+// ── Helper: resolve the logged-in customer id from the request token ──────────
+function bs_portal_current_customer_id(){
+    $token = bs_portal_get_request_token();
+    return $token ? intval(get_transient('bs_portal_customer_'.$token)) : 0;
+}
+
 // ── Login — find customer by phone or email ────────────────────────────────────
 add_action('wp_ajax_nopriv_bs_portal_login','bs_portal_login_handler');
 add_action('wp_ajax_bs_portal_login','bs_portal_login_handler');
@@ -33,7 +48,7 @@ function bs_portal_login_handler(){
     $identifier=sanitize_text_field($_POST['identifier']??'');
     if(empty($identifier)) wp_send_json_error('Please enter your phone or email');
     global $wpdb;
-    // Search by phone or email (trim whitespace, exact match on both fields)
+    // Search by phone or email (trim whitespace, exact + case-insensitive email match)
     $identifier = trim($identifier);
     $customer=$wpdb->get_row($wpdb->prepare(
         "SELECT * FROM {$wpdb->prefix}bookshop_customers
@@ -41,15 +56,24 @@ function bs_portal_login_handler(){
         $identifier, $identifier, $identifier
     ));
     if(!$customer) wp_send_json_error('No account found with that phone or email. Please ask staff to register you in-store.');
+
     // Generate a secure token and store in transient keyed by that token
     $token=bin2hex(random_bytes(16));
     set_transient('bs_portal_customer_'.$token, $customer->id, HOUR_IN_SECONDS*8);
-    // Set cookie via PHP — JS will also set it client-side as a fallback
+    // Set cookie via PHP (best-effort — JS will also set it)
     bs_portal_set_cookie($token, time()+HOUR_IN_SECONDS*8);
+
+    // Render the dashboard HTML so the JS can swap modal contents WITHOUT a page
+    // reload. This avoids the cookie/page-cache fragility on production hosts.
+    ob_start();
+    bs_render_portal_dashboard($customer);
+    $dashboard_html = ob_get_clean();
+
     wp_send_json_success([
         'name'  => $customer->name,
         'id'    => $customer->id,
-        'token' => $token, // returned so JS can set the cookie too
+        'token' => $token, // returned so JS can persist it (cookie + localStorage)
+        'html'  => $dashboard_html,
     ]);
 }
 
@@ -57,7 +81,7 @@ function bs_portal_login_handler(){
 add_action('wp_ajax_nopriv_bs_portal_logout','bs_portal_logout_handler');
 add_action('wp_ajax_bs_portal_logout','bs_portal_logout_handler');
 function bs_portal_logout_handler(){
-    $token=$_COOKIE['bs_portal_token']??'';
+    $token = bs_portal_get_request_token();
     if($token) delete_transient('bs_portal_customer_'.$token);
     bs_portal_set_cookie('', time()-3600);
     wp_send_json_success();
@@ -68,8 +92,7 @@ add_action('wp_ajax_nopriv_bs_portal_get_data','bs_portal_get_data_handler');
 add_action('wp_ajax_bs_portal_get_data','bs_portal_get_data_handler');
 function bs_portal_get_data_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    $token=$_COOKIE['bs_portal_token']??'';
-    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
+    $cid = bs_portal_current_customer_id();
     if(!$cid) wp_send_json_error('Not logged in');
     global $wpdb;
     $customer=bs_get_customer($cid);
@@ -118,13 +141,30 @@ function bs_portal_get_data_handler(){
     ]);
 }
 
+// ── Get full dashboard HTML (used after page refresh when cookie was lost) ──
+add_action('wp_ajax_nopriv_bs_portal_get_dashboard_html','bs_portal_get_dashboard_html_handler');
+add_action('wp_ajax_bs_portal_get_dashboard_html','bs_portal_get_dashboard_html_handler');
+function bs_portal_get_dashboard_html_handler(){
+    if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
+    $cid = bs_portal_current_customer_id();
+    if(!$cid) wp_send_json_error('Not logged in');
+    $customer = bs_get_customer($cid);
+    if(!$customer) wp_send_json_error('Account not found');
+    ob_start();
+    bs_render_portal_dashboard($customer);
+    $html = ob_get_clean();
+    wp_send_json_success([
+        'name' => $customer->name,
+        'html' => $html,
+    ]);
+}
+
 // ── Update profile ─────────────────────────────────────────────────────────────
 add_action('wp_ajax_nopriv_bs_portal_update_profile','bs_portal_update_profile_handler');
 add_action('wp_ajax_bs_portal_update_profile','bs_portal_update_profile_handler');
 function bs_portal_update_profile_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    $token=$_COOKIE['bs_portal_token']??'';
-    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
+    $cid = bs_portal_current_customer_id();
     if(!$cid) wp_send_json_error('Not logged in');
     $name=sanitize_text_field($_POST['name']??'');
     if(empty($name)) wp_send_json_error('Name is required');
@@ -144,8 +184,7 @@ add_action('wp_ajax_nopriv_bs_portal_reserve','bs_portal_reserve_handler');
 add_action('wp_ajax_bs_portal_reserve','bs_portal_reserve_handler');
 function bs_portal_reserve_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    $token=$_COOKIE['bs_portal_token']??'';
-    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
+    $cid = bs_portal_current_customer_id();
     if(!$cid) wp_send_json_error('Not logged in');
     $customer=bs_get_customer($cid);
     if(!$customer) wp_send_json_error('Account not found');
