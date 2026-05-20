@@ -65,6 +65,7 @@ require_once BOOKSHOP_DIR . 'includes/modules/rest-api.php';
 require_once BOOKSHOP_DIR . 'includes/modules/online-store.php';
 require_once BOOKSHOP_DIR . 'includes/modules/backup.php';
 require_once BOOKSHOP_DIR . 'includes/modules/smtp.php';
+require_once BOOKSHOP_DIR . 'includes/modules/sms.php';
 
 // New modules — v3
 require_once BOOKSHOP_DIR . 'includes/modules/eod-report.php';

@@ -362,6 +362,9 @@ function bs_page_settings(){
     </div>
     <?php endif; ?>
 
+    <!-- SMS / Mobile delivery -->
+    <?php if ( function_exists('bs_sms_render_settings_card') ) bs_sms_render_settings_card(); ?>
+
     <!-- Advanced Operations -->
     <div class="bs-card" style="max-width:760px;margin-bottom:20px">
         <h3 style="font-family:'Playfair Display',serif;margin-bottom:16px">🔧 Advanced Operations</h3>

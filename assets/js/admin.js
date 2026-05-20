@@ -1234,6 +1234,27 @@ $(document).on('click','#bs-smtp-test',function(){
         $out.html('<span style="color:var(--red,#c0392b)">✗ HTTP '+xhr.status+' — try saving settings first.</span>');
     });
 });
+// SMS test send. Same shape as the SMTP test — show the provider's actual
+// response so the admin can tell whether it's a sender ID rejection, a
+// missing token, an invalid recipient, or a network error.
+$(document).on('click','#bs-sms-test',function(){
+    var to = $('#bs-sms-test-to').val().trim();
+    if(!to){ alert('Enter a recipient phone first.'); return; }
+    var $btn = $(this).prop('disabled',true).text('Sending…');
+    var $out = $('#bs-sms-test-result').html('<span style="color:var(--muted)">Sending…</span>');
+    post({action:'bs_sms_test', to:to}).done(function(res){
+        $btn.prop('disabled',false).text('📲 Send Test SMS');
+        if(res && res.success){
+            $out.html('<span style="color:var(--green,#2a7a3b)">✓ '+esc(res.data.message)+'</span>');
+        } else {
+            $out.html('<span style="color:var(--red,#c0392b)">✗ '+esc((res&&res.data)?res.data:'Unknown error')+'</span>');
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled',false).text('📲 Send Test SMS');
+        $out.html('<span style="color:var(--red,#c0392b)">✗ HTTP '+xhr.status+' — try saving settings first.</span>');
+    });
+});
+
 $(document).on('click','#bs-run-expiry',function(){
     if(!confirm('Run loyalty points expiry now? This will expire points for inactive customers.')) return;
     var btn=$(this).prop('disabled',true).text('Running…');
