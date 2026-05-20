@@ -16,33 +16,52 @@ function bs_page_messaging(){
     <div id="msg-compose" class="bs-tab-content">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:1100px">
 
-        <!-- Segment -->
+        <!-- Recipients -->
         <div class="bs-card">
             <h3 style="font-family:'Playfair Display',serif;margin-bottom:14px">1. Select Recipients</h3>
-            <div class="bs-form-group" style="margin-bottom:10px">
-                <label>Filter by Genre (leave blank for all)</label>
-                <select id="msg-genre" class="bs-input">
-                    <option value="">All Customers</option>
-                    <?php foreach($genres as $g) echo "<option value='".esc_attr($g)."'>".esc_html($g)."</option>"; ?>
-                </select>
+
+            <!-- Segment filter (collapsed-style block) -->
+            <div style="background:#fdf8f0;border:1px solid #f0e8d8;border-radius:8px;padding:12px;margin-bottom:14px">
+                <div style="font-size:.78rem;color:#8a7a65;margin-bottom:8px;text-transform:uppercase;letter-spacing:.04em">📋 Load by segment</div>
+                <div class="bs-form-group" style="margin-bottom:8px">
+                    <label style="font-size:.82rem">Genre</label>
+                    <select id="msg-genre" class="bs-input">
+                        <option value="">All genres</option>
+                        <?php foreach($genres as $g) echo "<option value='".esc_attr($g)."'>".esc_html($g)."</option>"; ?>
+                    </select>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:10px">
+                    <div class="bs-form-group" style="flex:1;margin-bottom:0">
+                        <label style="font-size:.82rem">Active in last</label>
+                        <select id="msg-days" class="bs-input">
+                            <option value="30">30 days</option>
+                            <option value="90">90 days</option>
+                            <option value="180" selected>6 months</option>
+                            <option value="365">1 year</option>
+                            <option value="9999">All time</option>
+                        </select>
+                    </div>
+                    <div class="bs-form-group" style="flex:1;margin-bottom:0">
+                        <label style="font-size:.82rem">Min spend (<?=bs_currency()?>)</label>
+                        <input type="number" id="msg-min-spend" class="bs-input" value="0" min="0">
+                    </div>
+                </div>
+                <button class="bs-btn bs-btn-secondary" id="bs-load-segment" style="width:100%">Load Segment</button>
             </div>
-            <div class="bs-form-group" style="margin-bottom:10px">
-                <label>Active in last N days</label>
-                <select id="msg-days" class="bs-input">
-                    <option value="30">30 days</option>
-                    <option value="90">90 days</option>
-                    <option value="180" selected>6 months</option>
-                    <option value="365">1 year</option>
-                    <option value="9999">All time</option>
-                </select>
+
+            <!-- Manual add via search -->
+            <div style="position:relative;margin-bottom:14px">
+                <label style="font-size:.78rem;color:#8a7a65;margin-bottom:6px;display:block;text-transform:uppercase;letter-spacing:.04em">🔍 Or add specific customers</label>
+                <input type="text" id="msg-customer-search" class="bs-input" placeholder="Search by name, phone, or email…" autocomplete="off">
+                <div id="msg-customer-search-results" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:100;background:#fff;border:1px solid #e0d4c0;border-radius:0 0 8px 8px;max-height:240px;overflow-y:auto;box-shadow:0 6px 18px rgba(26,18,8,.12)"></div>
             </div>
-            <div class="bs-form-group" style="margin-bottom:12px">
-                <label>Min. spend (<?=bs_currency()?>)</label>
-                <input type="number" id="msg-min-spend" class="bs-input" value="0" min="0">
+
+            <!-- Selected list (chips) -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div id="msg-segment-result" style="font-size:.85rem;color:var(--muted)">No recipients selected.</div>
+                <button class="bs-btn-link" id="msg-clear-all" style="display:none;font-size:.78rem">Clear all</button>
             </div>
-            <button class="bs-btn bs-btn-secondary" id="bs-load-segment">Load Recipients</button>
-            <div id="msg-segment-result" style="margin-top:12px;font-size:.85rem;color:var(--muted)"></div>
-            <div id="msg-recipient-list" style="max-height:200px;overflow-y:auto;margin-top:8px;font-size:.8rem"></div>
+            <div id="msg-recipient-list" style="max-height:280px;overflow-y:auto;padding:6px;border:1px dashed #e0d4c0;border-radius:8px;background:#fafafa;min-height:60px"></div>
         </div>
 
         <!-- Compose -->
@@ -64,10 +83,11 @@ function bs_page_messaging(){
             </div>
             <div class="bs-form-group" style="margin-bottom:10px">
                 <label>Message Body <small style="color:var(--muted)">(use {name} {first_name} {points} as placeholders)</small></label>
-                <textarea id="msg-body" class="bs-input" rows="6" placeholder="Hello {first_name},&#10;&#10;We have exciting news for you…"></textarea>
+                <textarea id="msg-body" class="bs-input" rows="7" placeholder="Hi {first_name},&#10;&#10;We've just received some new arrivals we think you'll love…&#10;&#10;Drop by anytime — see you soon!"></textarea>
             </div>
-            <div style="display:flex;gap:8px">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <button class="bs-btn bs-btn-primary" id="bs-send-msg">Send Message</button>
+                <button class="bs-btn bs-btn-secondary" id="bs-preview-msg" type="button">👁 Preview</button>
                 <span id="msg-send-result" style="font-size:.83rem;line-height:34px"></span>
             </div>
         </div>
@@ -80,6 +100,21 @@ function bs_page_messaging(){
             <div id="msg-wa-links-body"></div>
         </div>
     </div>
+    </div>
+
+    <!-- Preview modal -->
+    <div id="msg-preview-modal" style="display:none;position:fixed;inset:0;background:rgba(26,18,8,.55);z-index:9999;padding:30px 16px;overflow-y:auto">
+        <div style="max-width:680px;margin:auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #f0e8d8;background:#fdf8f0">
+                <strong style="font-family:'Playfair Display',serif">Email Preview</strong>
+                <button id="msg-preview-close" style="border:0;background:transparent;font-size:1.4em;cursor:pointer;line-height:1;color:#8a7a65">×</button>
+            </div>
+            <div id="msg-preview-subject" style="padding:10px 18px;background:#f5ede0;font-size:.9em;color:#1a1208"></div>
+            <div id="msg-preview-body" style="max-height:60vh;overflow-y:auto"></div>
+            <div style="padding:12px 18px;border-top:1px solid #f0e8d8;font-size:.78rem;color:#8a7a65;background:#fdf8f0">
+                Placeholders are filled with sample data ({first_name} → Jane).
+            </div>
+        </div>
     </div>
 
     <div id="msg-log" class="bs-tab-content" style="display:none">

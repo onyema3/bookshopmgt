@@ -1001,45 +1001,161 @@ $(document).on('click','#bs-check-reorder',function(){
 });
 
 // ── Messaging ─────────────────────────────────────────────────────────────────
-var segmentIds=[];
+// Map<id, customer> — single source of truth for the recipient list. Segment
+// load, search-add, and per-chip removal all mutate this same store so the
+// chip render and the eventual send always see a consistent set.
+var msgRecipients = new Map();
+
+function msgRenderRecipients(){
+    var $count = $('#msg-segment-result');
+    var $list  = $('#msg-recipient-list');
+    var $clear = $('#msg-clear-all');
+    var customers = Array.from(msgRecipients.values());
+
+    if (customers.length === 0) {
+        $count.html('<em>No recipients selected.</em>');
+        $list.html('<div style="text-align:center;color:#bba89c;padding:14px;font-size:.82rem">Use a segment filter or the search above to add customers.</div>');
+        $clear.hide();
+        return;
+    }
+
+    var withEmail = customers.filter(function(c){return c.email;}).length;
+    var withPhone = customers.filter(function(c){return c.phone;}).length;
+    $count.html('<strong>'+customers.length+'</strong> recipient'+(customers.length!==1?'s':'')+
+                ' &mdash; <span style="color:#2a7a3b">'+withEmail+' email</span>'+
+                ', <span style="color:#004085">'+withPhone+' phone</span>');
+    $clear.show();
+
+    var html = customers.map(function(c){
+        var meta = c.email || c.phone || '';
+        return '<span class="msg-chip" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #e0d4c0;border-radius:14px;padding:4px 4px 4px 10px;margin:3px;font-size:.78rem;line-height:1.4;max-width:100%">' +
+            '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px"><strong>'+esc(c.name||'?')+'</strong>'+(meta?' <span style="color:#8a7a65">'+esc(meta)+'</span>':'')+'</span>' +
+            '<button class="msg-remove-recipient" data-id="'+c.id+'" title="Remove" style="border:0;background:#f5ede0;color:#8a7a65;cursor:pointer;width:18px;height:18px;border-radius:50%;font-size:.85em;line-height:1;padding:0">×</button>' +
+            '</span>';
+    }).join('');
+    $list.html(html);
+}
+
+// Initial render so the empty-state message shows up on page load.
+$(function(){ if($('#msg-recipient-list').length) msgRenderRecipients(); });
+
+// Segment load — replaces the current set with the segment results.
 $(document).on('click','#bs-load-segment',function(){
-    const genre=$('#msg-genre').val(),days=$('#msg-days').val(),spend=$('#msg-min-spend').val();
-    $(this).prop('disabled',true).text('Loading…');
-    const btn=$(this);
-    get({action:'bs_get_customer_segment',genre,days,min_spend:spend}).then(function(res){
-        btn.prop('disabled',false).text('Load Recipients');
+    var genre=$('#msg-genre').val(), days=$('#msg-days').val(), spend=$('#msg-min-spend').val();
+    var btn=$(this).prop('disabled',true).text('Loading…');
+    get({action:'bs_get_customer_segment',genre:genre,days:days,min_spend:spend}).then(function(res){
+        btn.prop('disabled',false).text('Load Segment');
         if(!res.success){alert('Failed to load');return;}
-        const customers=res.data||[];
-        segmentIds=customers.map(function(c){return c.id;});
-        $('#msg-segment-result').html('<strong>'+customers.length+' customers</strong> selected ('+customers.filter(function(c){return c.email;}).length+' with email, '+customers.filter(function(c){return c.phone;}).length+' with phone)');
-        const listHtml=customers.slice(0,10).map(function(c){
-            return '<div style="padding:4px 0;border-bottom:1px solid #f0e8d8">'+esc(c.name)+' — '+esc(c.email||'no email')+'</div>';
-        }).join('')+(customers.length>10?'<div style="color:var(--muted);font-size:.75rem;margin-top:4px">…and '+(customers.length-10)+' more</div>':'');
-        $('#msg-recipient-list').html(listHtml);
+        msgRecipients.clear();
+        (res.data||[]).forEach(function(c){ msgRecipients.set(parseInt(c.id), c); });
+        msgRenderRecipients();
     });
 });
-$(document).on('click','#bs-send-msg',function(){
-    if(!segmentIds.length){alert('Load recipients first.');return;}
-    const channel=$('#msg-channel').val();
-    const subject=$('#msg-subject').val().trim();
-    const body=$('#msg-body').val().trim();
-    if(!body){alert('Message body required');return;}
-    if((channel==='email'||channel==='both')&&!subject){alert('Email subject required');return;}
-    const btn=$(this).prop('disabled',true).text('Sending…');
 
-    if(channel==='email'||channel==='both'){
-        post({action:'bs_send_bulk_email',customer_ids:JSON.stringify(segmentIds),subject,body}).then(function(res){
+// Clear all
+$(document).on('click','#msg-clear-all',function(){
+    msgRecipients.clear();
+    msgRenderRecipients();
+});
+
+// Per-chip remove
+$(document).on('click','.msg-remove-recipient',function(){
+    var id = parseInt($(this).data('id'));
+    msgRecipients.delete(id);
+    msgRenderRecipients();
+});
+
+// Search-add: debounced search, pick a result to add, click-outside dismiss.
+var msgSearchTimer = null;
+$(document).on('input','#msg-customer-search',function(){
+    clearTimeout(msgSearchTimer);
+    var q = $(this).val().trim();
+    var $box = $('#msg-customer-search-results');
+    if(q.length < 2){ $box.hide().empty(); return; }
+    msgSearchTimer = setTimeout(function(){
+        get({action:'bs_search_customers', q:q}).then(function(res){
+            if(!res.success) return;
+            var results = res.data || [];
+            if(results.length === 0){
+                $box.html('<div style="padding:10px;color:#8a7a65;font-size:.82rem">No matches</div>').show();
+                return;
+            }
+            $box.html(results.map(function(c){
+                var inSet = msgRecipients.has(parseInt(c.id));
+                var meta  = c.email || c.phone || '';
+                return '<div class="msg-search-result" data-customer=\''+esc(JSON.stringify(c))+'\' style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #f5ede0;'+(inSet?'opacity:.55;':'')+'">' +
+                    '<strong>'+esc(c.name)+'</strong>' +
+                    (meta?' <span style="color:#8a7a65;font-size:.85em">'+esc(meta)+'</span>':'') +
+                    (inSet?' <span style="color:#2a7a3b;font-size:.78em;float:right">✓ added</span>':'') +
+                    '</div>';
+            }).join('')).show();
+        });
+    }, 200);
+});
+
+$(document).on('click','.msg-search-result',function(){
+    var c;
+    try { c = JSON.parse($(this).attr('data-customer')); } catch(e){ return; }
+    if(c && c.id && !msgRecipients.has(parseInt(c.id))){
+        msgRecipients.set(parseInt(c.id), c);
+        msgRenderRecipients();
+    }
+    $('#msg-customer-search').val('').focus();
+    $('#msg-customer-search-results').hide().empty();
+});
+
+// Click outside the search dropdown closes it.
+$(document).on('click', function(e){
+    if(!$(e.target).closest('#msg-customer-search-results, #msg-customer-search').length){
+        $('#msg-customer-search-results').hide();
+    }
+});
+
+// Preview — render the same HTML the recipient will see.
+$(document).on('click','#bs-preview-msg',function(){
+    var subject = $('#msg-subject').val().trim();
+    var body    = $('#msg-body').val().trim();
+    if(!body){ alert('Type a message body first to preview it.'); return; }
+    var btn = $(this).prop('disabled',true).text('Loading…');
+    post({action:'bs_preview_bulk_email', subject:subject, body:body}).then(function(res){
+        btn.prop('disabled',false).text('👁 Preview');
+        if(!res.success){ alert('Preview failed: '+(res.data||'')); return; }
+        $('#msg-preview-subject').html('<strong>Subject:</strong> '+esc(res.data.subject||'(no subject)'));
+        // res.data.html is server-built from sanitised text + esc_html, so it
+        // can be injected directly here.
+        $('#msg-preview-body').html(res.data.html);
+        $('#msg-preview-modal').show();
+    });
+});
+$(document).on('click','#msg-preview-close',function(){ $('#msg-preview-modal').hide(); });
+$(document).on('click','#msg-preview-modal',function(e){
+    if(e.target.id === 'msg-preview-modal') $(this).hide();
+});
+
+// Send
+$(document).on('click','#bs-send-msg',function(){
+    var ids = Array.from(msgRecipients.keys());
+    if(!ids.length){ alert('No recipients selected. Use a segment filter or the search above to add customers.'); return; }
+    var channel = $('#msg-channel').val();
+    var subject = $('#msg-subject').val().trim();
+    var body    = $('#msg-body').val().trim();
+    if(!body){ alert('Message body required'); return; }
+    if((channel==='email'||channel==='both') && !subject){ alert('Email subject required'); return; }
+    var btn = $(this).prop('disabled',true).text('Sending…');
+
+    if(channel==='email' || channel==='both'){
+        post({action:'bs_send_bulk_email', customer_ids:JSON.stringify(ids), subject:subject, body:body}).then(function(res){
             btn.prop('disabled',false).text('Send Message');
             if(res.success) $('#msg-send-result').html('<span style="color:var(--green)">✓ Sent to '+res.data.sent+' customers ('+res.data.failed+' failed)</span>');
-            else $('#msg-send-result').html('<span style="color:var(--red)">Error: '+esc(res.data)+'</span>');
+            else            $('#msg-send-result').html('<span style="color:var(--red)">Error: '+esc(res.data)+'</span>');
         });
     }
-    if(channel==='whatsapp'||channel==='both'){
-        post({action:'bs_get_whatsapp_links',customer_ids:JSON.stringify(segmentIds),message:body}).then(function(res){
+    if(channel==='whatsapp' || channel==='both'){
+        post({action:'bs_get_whatsapp_links', customer_ids:JSON.stringify(ids), message:body}).then(function(res){
             btn.prop('disabled',false).text('Send Message');
             if(!res.success) return;
-            const links=res.data||[];
-            const html=links.map(function(l){
+            var links = res.data || [];
+            var html = links.map(function(l){
                 return '<div style="padding:6px 0;border-bottom:1px solid #f0e8d8;display:flex;align-items:center;gap:10px"><span style="flex:1;font-size:.83rem">'+esc(l.name)+' ('+esc(l.phone)+')</span><a href="'+esc(l.url)+'" target="_blank" class="bs-btn bs-btn-secondary" style="font-size:.75rem;padding:4px 10px">Open WhatsApp</a></div>';
             }).join('');
             $('#msg-wa-links-body').html(html);
@@ -1047,6 +1163,7 @@ $(document).on('click','#bs-send-msg',function(){
         });
     }
 });
+
 $('#msg-channel').on('change',function(){
     $('#msg-email-fields').toggle($(this).val()!=='whatsapp');
 });
