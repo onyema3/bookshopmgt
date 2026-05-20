@@ -59,8 +59,25 @@ add_action('wp_ajax_bs_update_reservation',function(){
     global $wpdb;
     if(!bs_user_can_manage()) wp_send_json_error('Unauthorized',403);
     if(!bs_verify('bs_admin_nonce')) wp_send_json_error('Bad nonce');
-    $status=sanitize_text_field($_POST['status']??'');
-    $wpdb->update("{$wpdb->prefix}bookshop_reservations",['status'=>$status],['id'=>intval($_POST['id'])]);
+    $id     = intval($_POST['id']);
+    $status = sanitize_text_field($_POST['status']??'');
+
+    // Capture the row before the update so we can detect the pending → notified
+    // transition and fire a customer SMS — without that snapshot we'd SMS on
+    // every save of an already-notified row.
+    $prev = $wpdb->get_row( $wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}bookshop_reservations WHERE id=%d", $id ) );
+
+    $wpdb->update("{$wpdb->prefix}bookshop_reservations", ['status' => $status], ['id' => $id]);
+
+    if ( $prev && $status === 'notified' && $prev->status !== 'notified'
+         && function_exists( 'bs_send_reservation_ready_sms' ) ) {
+        // Best-effort. The SMS function logs delivery failures into
+        // bookshop_messages_queue and bookshop_last_sms_error, so a manager
+        // can audit the outcome without blocking the status change here.
+        bs_send_reservation_ready_sms( $prev );
+    }
+
     wp_send_json_success();
 });
 
@@ -87,6 +104,10 @@ add_action('wp_ajax_bs_save_settings',function(){
         // Operations
         'bookshop_low_stock_email','bookshop_whatsapp','bookshop_manager_discount_threshold',
         'bookshop_eod_email',
+        // SMS — public fields. API tokens / Twilio auth handled in secret_fields.
+        'bookshop_sms_enabled','bookshop_sms_provider','bookshop_sms_sender_id',
+        'bookshop_sms_default_country','bookshop_twilio_account_sid','bookshop_twilio_from_number',
+        'bookshop_sms_notify_reservation','bookshop_sms_notify_orders',
         // Payment gateways — public keys
         'bookshop_paystack_public_key',
         'bookshop_flutterwave_public_key',
@@ -104,6 +125,9 @@ add_action('wp_ajax_bs_save_settings',function(){
     $secret_fields = [
         'bookshop_paystack_secret_key',
         'bookshop_flutterwave_secret_key',
+        'bookshop_bulksms_api_token',
+        'bookshop_termii_api_key',
+        'bookshop_twilio_auth_token',
     ];
     foreach($secret_fields as $f){
         if(isset($_POST[$f]) && !empty($_POST[$f])){

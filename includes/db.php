@@ -444,6 +444,20 @@ function bs_install_v3_tables(){
         'bookshop_loyalty_expiry_months'  =>0,
         'bookshop_ip_whitelist'           =>'',
         'bookshop_drift_digest_email'     =>get_option('admin_email'),
+        // SMS — disabled by default; admin opts in. Defaults assume NG since
+        // BulkSMSNigeria is the primary provider; admin can flip to Termii or
+        // Twilio (which then needs +-prefixed E.164 destinations).
+        'bookshop_sms_enabled'            =>'0',
+        'bookshop_sms_provider'           =>'bulksmsnigeria',
+        'bookshop_sms_sender_id'          =>'',
+        'bookshop_sms_default_country'    =>'234',
+        'bookshop_bulksms_api_token'      =>'',
+        'bookshop_termii_api_key'         =>'',
+        'bookshop_twilio_account_sid'     =>'',
+        'bookshop_twilio_auth_token'      =>'',
+        'bookshop_twilio_from_number'     =>'',
+        'bookshop_sms_notify_reservation' =>'0',
+        'bookshop_sms_notify_orders'      =>'0',
     ];
     foreach($defaults as $k=>$v){ if(get_option($k)===false) update_option($k,$v); }
 

@@ -262,6 +262,156 @@ function bs_page_settings(){
         <?php endif; ?>
     </div>
 
+    <!-- SMS Notifications -->
+    <?php if ( current_user_can('manage_options') ):
+        $sms_provider = (string) get_option( 'bookshop_sms_provider', 'bulksmsnigeria' );
+        $sms_err      = get_option( 'bookshop_last_sms_error', '' );
+        $sms_err_at   = get_option( 'bookshop_last_sms_error_at', '' );
+        $bulksms_tok  = get_option( 'bookshop_bulksms_api_token', '' );
+        $termii_key   = get_option( 'bookshop_termii_api_key', '' );
+        $twilio_tok   = get_option( 'bookshop_twilio_auth_token', '' );
+    ?>
+    <div class="bs-card" style="max-width:760px;margin-bottom:20px">
+        <h3 style="font-family:'Playfair Display',serif;margin-bottom:8px">📱 SMS Notifications</h3>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
+            Send SMS to customers for reservation pick-ups and online order updates.
+            Pick a provider and enter its API credentials. Numbers in any format
+            (<code>0801…</code>, <code>+234…</code>, etc.) are normalised to E.164
+            using the default country code below.
+        </p>
+        <div class="bs-form-grid">
+            <div class="bs-form-group bs-span2">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="hidden" name="bookshop_sms_enabled" value="0">
+                    <input type="checkbox" name="bookshop_sms_enabled" class="bs-setting" value="1"
+                        <?=checked('1', get_option('bookshop_sms_enabled'), false)?>>
+                    <span>Enable SMS sending</span>
+                </label>
+            </div>
+            <div class="bs-form-group">
+                <label>Provider</label>
+                <select name="bookshop_sms_provider" id="bs-sms-provider" class="bs-input bs-setting">
+                    <option value="bulksmsnigeria" <?=$sms_provider==='bulksmsnigeria'?'selected':''?>>BulkSMSNigeria</option>
+                    <option value="termii"         <?=$sms_provider==='termii'?'selected':''?>>Termii</option>
+                    <option value="twilio"         <?=$sms_provider==='twilio'?'selected':''?>>Twilio</option>
+                </select>
+            </div>
+            <div class="bs-form-group">
+                <label>Default Country Code <small style="color:var(--muted);font-weight:normal">(no '+')</small></label>
+                <input type="text" name="bookshop_sms_default_country" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_sms_default_country','234'))?>"
+                    placeholder="234" maxlength="4">
+            </div>
+            <div class="bs-form-group bs-span2">
+                <label>Sender ID <small style="color:var(--muted);font-weight:normal">(shown to recipient — max 11 chars on most NG networks)</small></label>
+                <input type="text" name="bookshop_sms_sender_id" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_sms_sender_id',''))?>"
+                    placeholder="<?=esc_attr(get_option('bookshop_receipt_header',get_bloginfo('name')))?>"
+                    maxlength="11">
+            </div>
+
+            <!-- Provider-specific credential blocks. JS toggles which is shown. -->
+            <div class="bs-form-group bs-span2 bs-sms-creds bs-sms-creds-bulksmsnigeria"
+                 style="background:#f0f8f0;border-radius:8px;padding:12px;<?=$sms_provider==='bulksmsnigeria'?'':'display:none'?>">
+                <label style="color:#2a7a3b;font-weight:700">BulkSMSNigeria credentials</label>
+                <div style="margin-top:8px">
+                    <label style="font-size:.75rem;color:var(--muted)">API Token <?=$bulksms_tok?'<span style="color:#2a7a3b">(saved)</span>':''?></label>
+                    <input type="password" name="bookshop_bulksms_api_token" class="bs-input bs-setting"
+                        value="" autocomplete="new-password"
+                        placeholder="<?=$bulksms_tok ? '••••' . esc_attr( substr( $bulksms_tok, -4 ) ) : 'paste token from bulksmsnigeria.com'?>">
+                    <small style="font-size:.72rem;color:var(--muted)">Leave blank to keep current. Get one at <a href="https://www.bulksmsnigeria.com/sms-api" target="_blank">bulksmsnigeria.com/sms-api</a>.</small>
+                </div>
+            </div>
+            <div class="bs-form-group bs-span2 bs-sms-creds bs-sms-creds-termii"
+                 style="background:#fff8f0;border-radius:8px;padding:12px;<?=$sms_provider==='termii'?'':'display:none'?>">
+                <label style="color:#c8860a;font-weight:700">Termii credentials</label>
+                <div style="margin-top:8px">
+                    <label style="font-size:.75rem;color:var(--muted)">API Key <?=$termii_key?'<span style="color:#2a7a3b">(saved)</span>':''?></label>
+                    <input type="password" name="bookshop_termii_api_key" class="bs-input bs-setting"
+                        value="" autocomplete="new-password"
+                        placeholder="<?=$termii_key ? '••••' . esc_attr( substr( $termii_key, -4 ) ) : 'paste key from accounts.termii.com'?>">
+                    <small style="font-size:.72rem;color:var(--muted)">Leave blank to keep current. Get one at <a href="https://accounts.termii.com" target="_blank">accounts.termii.com</a>.</small>
+                </div>
+            </div>
+            <div class="bs-form-group bs-span2 bs-sms-creds bs-sms-creds-twilio"
+                 style="background:#f0f0ff;border-radius:8px;padding:12px;<?=$sms_provider==='twilio'?'':'display:none'?>">
+                <label style="color:#5e35b1;font-weight:700">Twilio credentials</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+                    <div>
+                        <label style="font-size:.75rem;color:var(--muted)">Account SID</label>
+                        <input type="text" name="bookshop_twilio_account_sid" class="bs-input bs-setting"
+                            value="<?=esc_attr(get_option('bookshop_twilio_account_sid',''))?>"
+                            placeholder="ACxxxxxxxxxxxxxx">
+                    </div>
+                    <div>
+                        <label style="font-size:.75rem;color:var(--muted)">Auth Token <?=$twilio_tok?'<span style="color:#2a7a3b">(saved)</span>':''?></label>
+                        <input type="password" name="bookshop_twilio_auth_token" class="bs-input bs-setting"
+                            value="" autocomplete="new-password"
+                            placeholder="<?=$twilio_tok ? '••••' . esc_attr( substr( $twilio_tok, -4 ) ) : 'auth token'?>">
+                    </div>
+                    <div class="bs-span2">
+                        <label style="font-size:.75rem;color:var(--muted)">From Number <small>(E.164 with '+')</small></label>
+                        <input type="text" name="bookshop_twilio_from_number" class="bs-input bs-setting"
+                            value="<?=esc_attr(get_option('bookshop_twilio_from_number',''))?>"
+                            placeholder="+14155551234">
+                        <small style="font-size:.72rem;color:var(--muted)">Twilio purchased number, or alphanumeric sender ID (region-permitting).</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Notification triggers -->
+            <div class="bs-form-group bs-span2" style="border-top:1px solid #f0e8d8;padding-top:14px;margin-top:6px">
+                <div style="font-size:.78rem;color:#8a7a65;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">When to send</div>
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:6px">
+                    <input type="hidden" name="bookshop_sms_notify_reservation" value="0">
+                    <input type="checkbox" name="bookshop_sms_notify_reservation" class="bs-setting" value="1"
+                        <?=checked('1', get_option('bookshop_sms_notify_reservation'), false)?>>
+                    <span>Reservation marked as <strong>notified</strong> — text the customer their book is ready.</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="hidden" name="bookshop_sms_notify_orders" value="0">
+                    <input type="checkbox" name="bookshop_sms_notify_orders" class="bs-setting" value="1"
+                        <?=checked('1', get_option('bookshop_sms_notify_orders'), false)?>>
+                    <span>Online order moves to <strong>ready</strong> or <strong>cancelled</strong>.</span>
+                </label>
+            </div>
+
+            <!-- Test send -->
+            <div class="bs-form-group bs-span2">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                    <input type="tel" id="bs-sms-test-to" class="bs-input"
+                        style="flex:1;min-width:200px"
+                        placeholder="recipient phone (any format)">
+                    <button class="bs-btn bs-btn-secondary" id="bs-sms-test" type="button">📤 Send Test SMS</button>
+                </div>
+                <small style="color:var(--muted);font-size:.75rem">
+                    Save the settings first, then send a test. The full provider response is recorded
+                    if it fails so you can see what went wrong.
+                </small>
+                <?php if($sms_err): ?>
+                <div style="margin-top:8px;padding:8px 10px;background:#f8d7da;color:#721c24;border-radius:6px;font-size:.78rem">
+                    <strong>Last failure</strong> (<?=esc_html($sms_err_at)?>): <?=esc_html($sms_err)?>
+                </div>
+                <?php endif; ?>
+                <div id="bs-sms-test-result" style="margin-top:8px;font-size:.83rem"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // Show only the credential block matching the selected provider so the
+    // admin doesn't fill in fields the chosen route will ignore. Keeps every
+    // block in the DOM so settings save still posts the right values.
+    jQuery(function($){
+        $(document).on('change','#bs-sms-provider',function(){
+            var v = $(this).val();
+            $('.bs-sms-creds').hide();
+            $('.bs-sms-creds-' + v).show();
+        });
+    });
+    </script>
+    <?php endif; ?>
+
     <!-- Advanced Operations -->
     <div class="bs-card" style="max-width:760px;margin-bottom:20px">
         <h3 style="font-family:'Playfair Display',serif;margin-bottom:16px">🔧 Advanced Operations</h3>

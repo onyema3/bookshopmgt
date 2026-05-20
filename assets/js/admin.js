@@ -1213,6 +1213,28 @@ $(document).on('click','#bs-send-eod-now',function(){
         alert(res.success?res.data.message:'Failed: '+(res.data||'Unknown error'));
     });
 });
+
+// SMS test send. Surfaces the provider's verbatim error so admins can debug
+// "Send failed" without having to dig into the messages_queue table — most
+// SMS providers reject for clear reasons (invalid sender ID, insufficient
+// credit, unrecognised destination) that the message text spells out.
+$(document).on('click','#bs-sms-test',function(){
+    var phone = $('#bs-sms-test-to').val().trim();
+    if(!phone){ alert('Enter a recipient phone number first.'); return; }
+    var $btn = $(this).prop('disabled',true).text('Sending…');
+    var $out = $('#bs-sms-test-result').html('<span style="color:var(--muted)">Sending…</span>');
+    post({action:'bs_sms_test', phone:phone}).done(function(res){
+        $btn.prop('disabled',false).text('📤 Send Test SMS');
+        if(res && res.success){
+            $out.html('<span style="color:var(--green,#2a7a3b)">✓ '+esc(res.data.message)+'</span>');
+        } else {
+            $out.html('<span style="color:var(--red,#c0392b)">✗ '+esc((res&&res.data)?res.data:'Unknown error')+'</span>');
+        }
+    }).fail(function(xhr){
+        $btn.prop('disabled',false).text('📤 Send Test SMS');
+        $out.html('<span style="color:var(--red,#c0392b)">✗ HTTP '+xhr.status+' — try saving settings first.</span>');
+    });
+});
 $(document).on('click','#bs-run-expiry',function(){
     if(!confirm('Run loyalty points expiry now? This will expire points for inactive customers.')) return;
     var btn=$(this).prop('disabled',true).text('Running…');

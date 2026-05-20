@@ -92,6 +92,15 @@ function bs_update_online_order_status($id,$status){
     // Notify the customer on every real status transition
     bs_notify_online_order_status_change($id,$status,$order->status);
 
+    // SMS notification for high-value transitions (ready / cancelled). Email
+    // is the primary channel above; SMS is a best-effort secondary so a
+    // customer who doesn't check email still hears about a pickup-ready order.
+    if ( function_exists( 'bs_send_online_order_sms' ) ) {
+        $fresh = $wpdb->get_row( $wpdb->prepare(
+            "SELECT * FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d", $id ) );
+        if ( $fresh ) bs_send_online_order_sms( $fresh, $status );
+    }
+
     return['ok'=>true,'status'=>$status];
 }
 
