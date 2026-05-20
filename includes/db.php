@@ -499,3 +499,50 @@ add_action('wp_ajax_bs_close_shift',  'bs_install_v4_tables', 1);
 add_action('wp_ajax_bs_park_sale',    'bs_install_v4_tables', 1);
 add_action('wp_ajax_bs_pin_login',    'bs_install_v4_tables', 1);
 add_action('wp_ajax_nopriv_bs_pin_login', 'bs_install_v4_tables', 1);
+
+
+// ── v5: link online orders to customer records ──────────────────────────────
+// Online-order customers were previously stranded in `bookshop_online_orders`,
+// invisible to the messaging UI / segment queries / loyalty hooks (all of
+// which key off `bookshop_customers.id`). v5 adds the link column and runs a
+// one-time backfill so existing orders catch up too.
+function bs_install_v5_online_customer_link(){
+    global $wpdb;
+
+    $oo_table = $wpdb->prefix . 'bookshop_online_orders';
+    if ( ! $wpdb->get_var( "SHOW TABLES LIKE '$oo_table'" ) ) return;
+
+    $cols = $wpdb->get_col( "SHOW COLUMNS FROM `$oo_table`", 0 );
+    if ( ! in_array( 'customer_id', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE `$oo_table`
+            ADD COLUMN customer_id BIGINT UNSIGNED DEFAULT NULL AFTER customer_address,
+            ADD KEY customer_id (customer_id)" );
+    }
+
+    // One-time backfill — guarded by an option so it doesn't churn every page load.
+    if ( ! get_option( 'bookshop_online_customers_backfilled' ) && function_exists( 'bs_get_or_create_customer_from_contact' ) ) {
+        $orders = $wpdb->get_results( "SELECT id, customer_name, customer_email, customer_phone, customer_address
+                                       FROM `$oo_table`
+                                       WHERE customer_id IS NULL
+                                         AND ( customer_email <> '' OR customer_phone <> '' )" );
+        foreach ( $orders as $o ) {
+            $cid = bs_get_or_create_customer_from_contact(
+                $o->customer_name,
+                $o->customer_email,
+                $o->customer_phone,
+                $o->customer_address ?? '',
+                'Backfilled from existing online order'
+            );
+            if ( $cid ) {
+                $wpdb->update( $oo_table, [ 'customer_id' => $cid ], [ 'id' => $o->id ] );
+            }
+        }
+        update_option( 'bookshop_online_customers_backfilled', 1 );
+    }
+}
+add_action( 'admin_init', 'bs_install_v5_online_customer_link' );
+// Also run on the public order-submission AJAX path so the column exists for
+// front-end customers placing their first online order on a freshly upgraded
+// site (admin_init never fires for non-admin requests).
+add_action( 'wp_ajax_bs_submit_online_order',         'bs_install_v5_online_customer_link', 1 );
+add_action( 'wp_ajax_nopriv_bs_submit_online_order',  'bs_install_v5_online_customer_link', 1 );

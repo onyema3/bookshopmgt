@@ -8,12 +8,25 @@ if(!defined('ABSPATH'))exit;
 function bs_create_online_order($data){
     global $wpdb;
     $ref='OD-'.strtoupper(substr(md5(uniqid('',true)),0,8));
+
+    // Find or create a customer record from the contact details so this order
+    // is reachable from messaging, segments, loyalty, and the customer's
+    // purchase history — not stranded in bookshop_online_orders.
+    $customer_id = bs_get_or_create_customer_from_contact(
+        $data['name']    ?? '',
+        $data['email']   ?? '',
+        $data['phone']   ?? '',
+        $data['address'] ?? '',
+        "Created from online order $ref"
+    );
+
     $wpdb->insert("{$wpdb->prefix}bookshop_online_orders",[
         'ref'            =>$ref,
         'customer_name'  =>sanitize_text_field($data['name']??''),
         'customer_email' =>sanitize_email($data['email']??''),
         'customer_phone' =>sanitize_text_field($data['phone']??''),
         'customer_address'=>sanitize_textarea_field($data['address']??''),
+        'customer_id'    =>$customer_id ?: null,
         'items_data'     =>json_encode($data['items']??[]),
         'subtotal'       =>floatval($data['subtotal']??0),
         'total'          =>floatval($data['total']??0),
@@ -22,7 +35,7 @@ function bs_create_online_order($data){
         'status'         =>'pending',
     ]);
     $id=$wpdb->insert_id;
-    bs_audit('online_order_created','online_order',$id,"Order $ref created");
+    bs_audit('online_order_created','online_order',$id,"Order $ref created".($customer_id?" (linked to customer #$customer_id)":''));
     // Notify admin
     $shop=get_option('bookshop_receipt_header',get_bloginfo('name'));
     $items=json_decode($wpdb->get_var($wpdb->prepare("SELECT items_data FROM {$wpdb->prefix}bookshop_online_orders WHERE id=%d",$id)),true);
@@ -99,10 +112,10 @@ function bs_complete_online_order($order_id){
     }
     if(empty($cart)) return false;
 
-    // Match existing customer by email/phone, if any. We do not auto-create
-    // customers from online orders here; a manager can do that explicitly.
-    $customer_id=0;
-    if($order->customer_email){
+    // Prefer the customer_id captured at order-creation time. Fall back to
+    // matching by email/phone for legacy orders predating the customer link.
+    $customer_id = intval($order->customer_id ?? 0);
+    if(!$customer_id && $order->customer_email){
         $customer_id=intval($wpdb->get_var($wpdb->prepare(
             "SELECT id FROM {$wpdb->prefix}bookshop_customers WHERE email=%s LIMIT 1",
             $order->customer_email)));
