@@ -344,6 +344,17 @@ if(!is_user_logged_in()): ?>
             <button class="pay-btn" data-method="card">💳 Card</button>
             <button class="pay-btn" data-method="transfer">📲 Transfer</button>
             <button class="pay-btn" data-method="split">⚡ Split</button>
+            <button class="pay-btn" data-method="gift_card">🎁 Gift Card</button>
+        </div>
+
+        <!-- Gift card input (shown when gift_card payment selected) -->
+        <div id="gc-redeem-row" style="display:none;margin:6px 0">
+            <div style="display:flex;gap:5px;align-items:center">
+                <input type="text" id="gc-code-input" placeholder="Enter gift card code..." style="flex:1;padding:7px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:.82rem;text-transform:uppercase;font-family:var(--fb)">
+                <button type="button" id="btn-gc-check" style="padding:6px 10px;border:1px solid var(--border);background:var(--warm);border-radius:6px;font-size:.78rem;cursor:pointer;font-family:var(--fb)">Check</button>
+            </div>
+            <div id="gc-balance-info" style="display:none;font-size:.78rem;margin-top:4px;padding:5px 8px;border-radius:6px;background:#e8f8e8;color:#27ae60;font-weight:600"></div>
+            <div id="gc-error-info" style="display:none;font-size:.78rem;margin-top:4px;padding:5px 8px;border-radius:6px;background:#fde8e8;color:#c0392b"></div>
         </div>
 
         <!-- Split payment amounts -->
@@ -972,11 +983,42 @@ document.querySelectorAll('.pay-btn').forEach(b=>{
         document.getElementById('split-inputs').style.display=payment==='split'?'flex':'none';
         // Show tendered row only for cash payment
         document.getElementById('tendered-row').style.display=payment==='cash'?'flex':'none';
+        // Show gift card row only for gift_card payment
+        document.getElementById('gc-redeem-row').style.display=payment==='gift_card'?'block':'none';
+        if(payment!=='gift_card'){
+            document.getElementById('gc-balance-info').style.display='none';
+            document.getElementById('gc-error-info').style.display='none';
+        }
         if(payment!=='cash'){
             document.getElementById('change-row').style.display='none';
             document.getElementById('tendered').value='';
         }
         updateChange();
+    });
+});
+
+// ── Gift Card Balance Check at POS ───────────────────────────────────
+let gcVerifiedCode='', gcVerifiedBalance=0;
+document.getElementById('btn-gc-check').addEventListener('click',function(){
+    const code=document.getElementById('gc-code-input').value.trim();
+    if(!code){alert('Enter a gift card code');return;}
+    const btn=this;btn.textContent='...';btn.disabled=true;
+    post({action:'bs_pos_check_gc',nonce:NONCE,code}).then(d=>{
+        btn.textContent='Check';btn.disabled=false;
+        const info=document.getElementById('gc-balance-info');
+        const err=document.getElementById('gc-error-info');
+        if(d.success){
+            gcVerifiedCode=d.data.code;
+            gcVerifiedBalance=parseFloat(d.data.balance);
+            info.textContent='✓ Balance: '+CUR+fmt(gcVerifiedBalance)+(d.data.expires_at?' | Expires: '+d.data.expires_at:'');
+            info.style.display='block';
+            err.style.display='none';
+        } else {
+            gcVerifiedCode='';gcVerifiedBalance=0;
+            err.textContent=typeof d.data==='string'?d.data:(d.data?.message||'Invalid card');
+            err.style.display='block';
+            info.style.display='none';
+        }
     });
 });
 
@@ -1119,6 +1161,11 @@ function submitSale(){
     const note=document.getElementById('pos-note').value;
     let payDet={};
     if(payment==='split'){payDet={cash:parseFloat(document.getElementById('split-cash').value)||0,card:parseFloat(document.getElementById('split-card').value)||0};}
+    if(payment==='gift_card'){
+        const gcCode=document.getElementById('gc-code-input').value.trim();
+        if(!gcCode){btn.disabled=false;btn.textContent='Complete Sale';alert('Enter a gift card code');return;}
+        payDet={gc_code:gcCode};
+    }
 
     post({action:'bs_submit_sale',nonce:NONCE,
         cart:JSON.stringify(cart),payment,payment_details:JSON.stringify(payDet),
@@ -1135,11 +1182,14 @@ function submitSale(){
             if(d.data?.code==='manager_required'){showMgrModal();}
             else if(handleNoBranchError(d)){/* picker shown */}
             else if(d.data?.code==='insufficient_stock' || d.data?.code==='stock_race'){
-                // Server rejected the sale because branch stock changed under
-                // us (another cashier sold the same title, or the cart asked
-                // for more than is on hand at this branch). Show the message
-                // verbatim — it already names the book and the available qty.
                 alert(d.data.message);
+            }
+            else if(d.data?.code==='gc_insufficient'){
+                // Gift card balance insufficient — show clear message
+                alert(d.data.message);
+                document.getElementById('gc-error-info').textContent=d.data.message;
+                document.getElementById('gc-error-info').style.display='block';
+                document.getElementById('gc-balance-info').style.display='none';
             }
             else alert('Error: '+(typeof d.data==='string'?d.data:d.data?.message||'Unknown error'));
         }
@@ -1457,6 +1507,12 @@ window.newSale=function(){
     document.querySelector('.pay-btn[data-method="cash"]').classList.add('active');
     document.getElementById('split-inputs').style.display='none';
     document.getElementById('tendered-row').style.display='flex';
+    // Reset gift card fields
+    document.getElementById('gc-redeem-row').style.display='none';
+    document.getElementById('gc-code-input').value='';
+    document.getElementById('gc-balance-info').style.display='none';
+    document.getElementById('gc-error-info').style.display='none';
+    gcVerifiedCode='';gcVerifiedBalance=0;
     renderGrid([]);renderCart();updateTotals();
     document.getElementById('pos-search').focus();
 };
@@ -1602,6 +1658,7 @@ document.addEventListener('keydown',function(e){
         case '2':  e.preventDefault(); document.querySelector('.pay-btn[data-method="card"]').click(); break;
         case '3':  e.preventDefault(); document.querySelector('.pay-btn[data-method="transfer"]').click(); break;
         case '4':  e.preventDefault(); document.querySelector('.pay-btn[data-method="split"]').click(); break;
+        case '5':  e.preventDefault(); document.querySelector('.pay-btn[data-method="gift_card"]').click(); break;
         case 'Escape': window.newSale&&document.getElementById('receipt-modal').style.display==='flex'&&newSale(); break;
     }
 });

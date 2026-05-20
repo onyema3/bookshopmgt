@@ -36,6 +36,7 @@ require_once BOOKSHOP_DIR . 'includes/ajax-books.php';
 require_once BOOKSHOP_DIR . 'includes/ajax-sales.php';
 require_once BOOKSHOP_DIR . 'includes/ajax-customers.php';
 require_once BOOKSHOP_DIR . 'includes/ajax-misc.php';
+require_once BOOKSHOP_DIR . 'includes/ajax-gift-cards.php';
 
 // Admin
 require_once BOOKSHOP_DIR . 'admin/admin.php';
@@ -50,6 +51,8 @@ require_once BOOKSHOP_DIR . 'admin/page-online-orders.php';
 require_once BOOKSHOP_DIR . 'admin/page-reports.php';
 require_once BOOKSHOP_DIR . 'admin/page-settings.php';
 require_once BOOKSHOP_DIR . 'admin/page-staff.php';
+require_once BOOKSHOP_DIR . 'admin/page-inventory-forecast.php';
+require_once BOOKSHOP_DIR . 'admin/page-gift-cards.php';
 
 // POS & Frontend
 require_once BOOKSHOP_DIR . 'pos/pos.php';
@@ -81,10 +84,13 @@ require_once BOOKSHOP_DIR . 'includes/modules/pwa.php';
 require_once BOOKSHOP_DIR . 'includes/modules/pdf-export.php';
 require_once BOOKSHOP_DIR . 'includes/modules/bundles.php';
 require_once BOOKSHOP_DIR . 'includes/modules/drift-digest.php';
+require_once BOOKSHOP_DIR . 'includes/modules/inventory-forecast.php';
+require_once BOOKSHOP_DIR . 'includes/modules/gift-cards.php';
 
 // Portal
 require_once BOOKSHOP_DIR . 'includes/ajax-portal.php';
 require_once BOOKSHOP_DIR . 'frontend/customer-portal.php';
+require_once BOOKSHOP_DIR . 'frontend/gift-card-purchase.php';
 
 register_activation_hook( __FILE__, 'bookshop_install' );
 register_deactivation_hook( __FILE__, 'bookshop_deactivate' );
