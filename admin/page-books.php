@@ -101,8 +101,25 @@ function bs_page_books(){
         <?php endif; ?>
     </div>
 
+    <!-- Bulk actions bar — hidden by default, JS reveals it when ≥1 row is checked.
+         Keeping it here (not floating) so it doesn't fight the existing toolbar
+         for layout when both are visible. -->
+    <div id="bs-bulk-bar" class="bs-toolbar" style="display:none;background:#fdf8f0;border:1px solid #e0d4c0;border-radius:8px;padding:8px 12px;margin-top:8px;align-items:center">
+        <strong id="bs-bulk-count" style="color:#5d4a00">0 selected</strong>
+        <select id="bs-bulk-action" class="bs-select">
+            <option value="">Bulk action…</option>
+            <option value="price">% Price change</option>
+            <option value="rename_genre">Rename genre</option>
+            <option value="archive">Archive (mark inactive)</option>
+            <option value="restore">Restore (mark active)</option>
+        </select>
+        <button class="bs-btn bs-btn-primary" id="bs-bulk-apply" type="button">Apply</button>
+        <a href="#" id="bs-bulk-clear" style="font-size:.82rem;color:var(--muted);margin-left:auto">Clear selection</a>
+    </div>
+
     <table class="bs-table" id="bs-books-table">
         <thead><tr>
+            <th style="width:34px;text-align:center"><input type="checkbox" id="bs-select-all" title="Select all visible"></th>
             <th>Cover</th><th>Title / Author</th><th>ISBN</th><th>Genre</th>
             <th>Location</th><th>Cost</th><th>Price</th><th>Margin</th>
             <th><?=$branch_label ? 'Stock @ '.esc_html($branch_label) : 'Stock'?></th>
@@ -117,6 +134,7 @@ function bs_page_books(){
             data-author="<?=esc_attr(strtolower($b->author))?>" data-isbn="<?=esc_attr($b->isbn)?>"
             data-genre="<?=esc_attr(strtolower($b->genre))?>" data-status="<?=esc_attr($b->status)?>"
             data-stock="<?=intval($b->stock_qty)?>" data-threshold="<?=intval($b->low_stock_threshold)?>">
+            <td style="text-align:center"><input type="checkbox" class="bs-row-select" data-id="<?=esc_attr($b->id)?>"></td>
             <td><?php if($b->cover_url): ?><img src="<?=esc_url($b->cover_url)?>" class="bs-cover-thumb"><?php else: ?><span class="bs-no-cover">📖</span><?php endif; ?></td>
             <td><strong><?=esc_html($b->title)?></strong><br><small class="bs-muted"><?=esc_html($b->author)?></small>
                 <?php if($b->location): ?><br><span class="bs-tag">📍 <?=esc_html($b->location)?></span><?php endif; ?></td>
@@ -213,6 +231,84 @@ function bs_page_books(){
     <?php $body=ob_get_clean();
     bs_modal('bs-import-modal','Import Books (CSV)',$body,
         "<button class='bs-btn bs-btn-secondary bs-modal-close'>Close</button><button class='bs-btn bs-btn-primary' id='bs-do-import'>Import</button>");
+
+    // Bulk: % price change modal. Number is signed (-100..1000), with checkbox
+    // for whether to also bump cost_price (not the default — sellers usually
+    // want to mark up margin without touching what they paid). Rounding mode
+    // covers the two common cases: keep cents (decimals) for exact margins,
+    // or round to whole units for shelf-friendly prices.
+    ob_start(); ?>
+    <p style="margin-bottom:12px;color:var(--muted);font-size:.9rem">
+        Apply to <strong id="bs-bulk-price-count">0 selected books</strong>.
+        Negative values discount; positive values mark up. Resulting prices are clamped to ≥ 0.
+    </p>
+    <div class="bs-form-grid">
+        <div class="bs-form-group">
+            <label>% change</label>
+            <div style="display:flex;align-items:center;gap:6px">
+                <input type="number" id="bs-bulk-pct" class="bs-input" step="0.1" min="-100" max="1000" placeholder="e.g. 10 or -5" style="max-width:140px">
+                <span style="font-size:1.2em;color:var(--muted)">%</span>
+            </div>
+            <small style="color:var(--muted);font-size:.75rem">e.g. <code>10</code> = +10%, <code>-5</code> = −5%, <code>0</code> would be a no-op.</small>
+        </div>
+        <div class="bs-form-group">
+            <label>Rounding</label>
+            <select id="bs-bulk-round" class="bs-input">
+                <option value="cent">Round to 2 decimals (e.g. 1,234.56)</option>
+                <option value="whole">Round to whole units (e.g. 1,235)</option>
+            </select>
+        </div>
+        <div class="bs-form-group bs-span2">
+            <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:400">
+                <input type="checkbox" id="bs-bulk-also-cost">
+                <span>Also adjust <strong>cost price</strong> by the same percentage</span>
+            </label>
+            <small style="display:block;color:var(--muted);font-size:.75rem;margin-top:4px">
+                Off by default. Cost price reflects what you paid the supplier — usually you want to bump the markup, not rewrite history.
+            </small>
+        </div>
+    </div>
+    <?php $body=ob_get_clean();
+    bs_modal('bs-bulk-price-modal','Bulk: % Price Change',$body,
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-bulk-price-apply'>Apply</button>");
+
+    // Bulk: rename genre modal. Single text input + datalist of existing
+    // genres so the user can either type a new one or pick an existing one
+    // to merge into.
+    ob_start(); ?>
+    <p style="margin-bottom:12px;color:var(--muted);font-size:.9rem">
+        Rename the genre on <strong id="bs-bulk-genre-count">0 selected books</strong>.
+        Pick an existing genre to merge them into one, or type a new name.
+    </p>
+    <div class="bs-form-group">
+        <label>Rename to</label>
+        <input type="text" id="bs-bulk-genre-to" class="bs-input" list="bs-bulk-genre-list" placeholder="e.g. Fiction" maxlength="100">
+        <datalist id="bs-bulk-genre-list">
+            <?php foreach($genres as $g) echo '<option value="'.esc_attr($g).'">'; ?>
+        </datalist>
+        <small style="color:var(--muted);font-size:.75rem">
+            Leave blank to <em>clear</em> the genre on these books.
+        </small>
+    </div>
+    <?php $body=ob_get_clean();
+    bs_modal('bs-bulk-genre-modal','Bulk: Rename Genre',$body,
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-bulk-genre-apply'>Rename</button>");
+
+    // Bulk: archive / restore confirmation. Same modal serves both — JS
+    // updates the heading and footer button text based on the action.
+    ob_start(); ?>
+    <p id="bs-bulk-status-warning" style="font-size:.95rem">
+        You are about to <strong id="bs-bulk-status-verb">archive</strong>
+        <strong id="bs-bulk-status-count">0</strong> book<span id="bs-bulk-status-plural">s</span>.
+    </p>
+    <p style="margin-top:8px;color:var(--muted);font-size:.85rem">
+        Archived books are hidden from the catalogue and POS search but their data, sales history, and stock counts are preserved.
+        Use <em>Restore</em> to bring them back at any time.
+    </p>
+    <div id="bs-bulk-status-titles" style="max-height:200px;overflow:auto;background:#fdf8f0;border:1px solid #e0d4c0;border-radius:6px;padding:10px;margin-top:8px;font-size:.82rem;line-height:1.5"></div>
+    <?php $body=ob_get_clean();
+    bs_modal('bs-bulk-status-modal','Bulk: Confirm',$body,
+        "<button class='bs-btn bs-btn-secondary bs-modal-close'>Cancel</button><button class='bs-btn bs-btn-primary' id='bs-bulk-status-apply'>Confirm</button>");
     ?>
     <?php
 }
