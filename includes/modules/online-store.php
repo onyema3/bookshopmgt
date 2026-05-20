@@ -69,8 +69,19 @@ function bs_update_online_order_status($id,$status){
         return['ok'=>true,'no_change'=>true,'status'=>$status];
     }
 
-    $wpdb->update("{$wpdb->prefix}bookshop_online_orders",['status'=>$status],['id'=>$id]);
-    bs_audit('online_order_status','online_order',$id,"Status: {$order->status} → $status");
+    // When a manager moves an order into a paid state but no payment gateway
+    // was recorded (i.e. they're confirming an offline payment from the admin),
+    // mark it as manual and capture the order total as the payment amount so
+    // the Payment column on the admin page reflects the change.
+    $update = ['status' => $status];
+    $paid_states = ['paid','processing','ready','completed'];
+    if(in_array($status,$paid_states,true) && empty($order->payment_gateway)){
+        $update['payment_gateway'] = 'manual';
+        $update['payment_amount']  = floatval($order->total);
+    }
+
+    $wpdb->update("{$wpdb->prefix}bookshop_online_orders",$update,['id'=>$id]);
+    bs_audit('online_order_status','online_order',$id,"Status: {$order->status} → $status".(isset($update['payment_gateway'])?' (manual payment recorded)':''));
 
     // On transition to completed, materialize as a sale (decrement stock, create
     // sales row) once. Idempotent via linked_sale_id check.

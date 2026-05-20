@@ -40,7 +40,25 @@ function bs_page_online_orders(){
             <?php $o_type_cls = ($o->type==='delivery') ? 'bs-badge-card' : 'bs-badge-cash'; ?>
             <td><span class="bs-badge <?=$o_type_cls?>"><?=$o->type?></span></td>
             <td><strong><?=bs_fmt($o->total)?></strong></td>
-            <td><?=$o->payment_gateway?'<span class="bs-badge bs-badge-active">'.esc_html($o->payment_gateway).'</span>':'<span class="bs-badge bs-badge-inactive">None</span>'?></td>
+            <?php
+            // Payment column: show the gateway when one was recorded (online
+            // payment via Paystack/Flutterwave or "manual" when an admin
+            // confirmed an offline payment); otherwise derive from status so
+            // legacy orders that were marked Paid before this column was wired
+            // up still surface correctly.
+            $paid_states = ['paid','processing','ready','completed'];
+            if($o->payment_gateway){
+                $gw_label = ($o->payment_gateway==='manual') ? 'Manual' : ucfirst($o->payment_gateway);
+                $pay_html = '<span class="bs-badge bs-badge-active">'.esc_html($gw_label).'</span>';
+            } elseif(in_array($o->status,$paid_states,true)){
+                $pay_html = '<span class="bs-badge bs-badge-active">Paid</span>';
+            } elseif($o->status==='cancelled'){
+                $pay_html = '<span class="bs-badge bs-badge-inactive">—</span>';
+            } else {
+                $pay_html = '<span class="bs-badge bs-badge-inactive">Unpaid</span>';
+            }
+            ?>
+            <td><?=$pay_html?></td>
             <td>
                 <select class="bs-order-status-select bs-select-xs" data-id="<?=esc_attr($o->id)?>" data-prev="<?=esc_attr($o->status)?>" onchange="bsUpdateOrderStatus(this)">
                     <?php foreach($statuses as $s) echo "<option value='$s'".selected($o->status,$s,false).">$s</option>"; ?>
