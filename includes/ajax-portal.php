@@ -19,9 +19,11 @@ function bs_portal_login_handler(){
         $identifier, $identifier
     ));
     if(!$customer) wp_send_json_error('No account found with that phone or email. Please ask staff to register you in-store.');
-    // Store in transient keyed by session
-    if(!session_id() && !headers_sent()) @session_start();
-    set_transient('bs_portal_customer_'.session_id(), $customer->id, HOUR_IN_SECONDS*8);
+    // Generate a secure token and store in transient keyed by that token
+    $token=bin2hex(random_bytes(16));
+    set_transient('bs_portal_customer_'.$token, $customer->id, HOUR_IN_SECONDS*8);
+    // Set cookie so the token persists across page reloads
+    setcookie('bs_portal_token', $token, time()+HOUR_IN_SECONDS*8, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true);
     wp_send_json_success(['name'=>$customer->name,'id'=>$customer->id]);
 }
 
@@ -29,8 +31,9 @@ function bs_portal_login_handler(){
 add_action('wp_ajax_nopriv_bs_portal_logout','bs_portal_logout_handler');
 add_action('wp_ajax_bs_portal_logout','bs_portal_logout_handler');
 function bs_portal_logout_handler(){
-    if(!session_id() && !headers_sent()) @session_start();
-    delete_transient('bs_portal_customer_'.session_id());
+    $token=$_COOKIE['bs_portal_token']??'';
+    if($token) delete_transient('bs_portal_customer_'.$token);
+    setcookie('bs_portal_token', '', time()-3600, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true);
     wp_send_json_success();
 }
 
@@ -39,8 +42,8 @@ add_action('wp_ajax_nopriv_bs_portal_get_data','bs_portal_get_data_handler');
 add_action('wp_ajax_bs_portal_get_data','bs_portal_get_data_handler');
 function bs_portal_get_data_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    if(!session_id() && !headers_sent()) @session_start();
-    $cid=intval(get_transient('bs_portal_customer_'.session_id()));
+    $token=$_COOKIE['bs_portal_token']??'';
+    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
     if(!$cid) wp_send_json_error('Not logged in');
     global $wpdb;
     $customer=bs_get_customer($cid);
@@ -94,8 +97,8 @@ add_action('wp_ajax_nopriv_bs_portal_update_profile','bs_portal_update_profile_h
 add_action('wp_ajax_bs_portal_update_profile','bs_portal_update_profile_handler');
 function bs_portal_update_profile_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    if(!session_id() && !headers_sent()) @session_start();
-    $cid=intval(get_transient('bs_portal_customer_'.session_id()));
+    $token=$_COOKIE['bs_portal_token']??'';
+    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
     if(!$cid) wp_send_json_error('Not logged in');
     $name=sanitize_text_field($_POST['name']??'');
     if(empty($name)) wp_send_json_error('Name is required');
@@ -115,8 +118,8 @@ add_action('wp_ajax_nopriv_bs_portal_reserve','bs_portal_reserve_handler');
 add_action('wp_ajax_bs_portal_reserve','bs_portal_reserve_handler');
 function bs_portal_reserve_handler(){
     if(!check_ajax_referer('bs_portal_nonce','nonce',false)) wp_send_json_error('Invalid request');
-    if(!session_id() && !headers_sent()) @session_start();
-    $cid=intval(get_transient('bs_portal_customer_'.session_id()));
+    $token=$_COOKIE['bs_portal_token']??'';
+    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
     if(!$cid) wp_send_json_error('Not logged in');
     $customer=bs_get_customer($cid);
     if(!$customer) wp_send_json_error('Account not found');

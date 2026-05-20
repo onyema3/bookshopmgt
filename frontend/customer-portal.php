@@ -21,7 +21,8 @@ function bs_portal_shortcode($atts){
     ]);
 
     // Check if customer already has a session
-    $cid=intval(get_transient('bs_portal_customer_'.session_id()));
+    $token=$_COOKIE['bs_portal_token']??'';
+    $cid=$token?intval(get_transient('bs_portal_customer_'.$token)):0;
     $is_logged_in=$cid && ($customer=bs_get_customer($cid));
 
     ob_start();
@@ -53,12 +54,7 @@ function bs_portal_shortcode($atts){
     return ob_get_clean();
 }
 
-// ── Start session at plugins_loaded before ANY output ─────────────────────────
-add_action('plugins_loaded',function(){
-    if(!is_admin() && !wp_doing_ajax() && !session_id() && !headers_sent()){
-        @session_start();
-    }
-},1);
+// ── Portal login uses cookie-based token — no PHP session needed ──────────────
 
 // ── Login screen ──────────────────────────────────────────────────────────────
 function bs_render_portal_login($title){
