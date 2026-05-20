@@ -135,7 +135,7 @@ add_action('wp_ajax_bs_restore_backup', function() {
 
         // Replace table prefix if different
         $site_prefix = $wpdb->prefix;
-        $stmt = preg_replace('/`([a-z0-9_]*bookshop[a-z0-9_]*)`/i', "`{$site_prefix}$1`", $stmt);
+        $stmt = preg_replace('/`[a-z0-9_]*(bookshop[a-z0-9_]*)`/i', "`{$site_prefix}$1`", $stmt);
 
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
         $result = $wpdb->query($stmt);
