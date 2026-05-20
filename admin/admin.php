@@ -16,6 +16,8 @@ add_action('admin_menu',function(){
     add_submenu_page('bookshop','Messaging','📣 Messaging',$cap_mgr,'bookshop-messaging','bs_page_messaging');
     add_submenu_page('bookshop','Online Orders','🛒 Online & API',$cap_mgr,'bookshop-online','bs_page_online_orders');
     add_submenu_page('bookshop','Reports','📊 Reports',$cap_mgr,'bookshop-reports','bs_page_reports');
+    add_submenu_page('bookshop','Forecast','📈 Forecast',$cap_mgr,'bookshop-forecast','bs_page_inventory_forecast');
+    add_submenu_page('bookshop','Gift Cards','🎁 Gift Cards',$cap_mgr,'bookshop-gift-cards','bs_page_gift_cards');
     add_submenu_page('bookshop','Staff','👤 Staff',$cap_mgr,'bookshop-staff','bs_page_staff');
     // Settings is sensitive (API keys, payment secrets) — keep admin-only
     add_submenu_page('bookshop','Settings','⚙️ Settings',$cap_admin,'bookshop-settings','bs_page_settings');
