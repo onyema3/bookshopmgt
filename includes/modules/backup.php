@@ -123,9 +123,18 @@ add_action('wp_ajax_bs_restore_backup', function() {
     $errors   = [];
 
     // Suppress errors during restore and handle each statement
+    $site_prefix = $wpdb->prefix;
+
     foreach ($statements as $stmt) {
-        $stmt = trim($stmt);
-        if (empty($stmt) || substr($stmt, 0, 2) === '--') continue;
+        // Strip SQL comment lines (-- ...) from the statement block
+        $lines = explode("\n", $stmt);
+        $lines = array_filter($lines, function($line) {
+            $trimmed = ltrim($line);
+            return $trimmed !== '' && substr($trimmed, 0, 2) !== '--';
+        });
+        $stmt = trim(implode("\n", $lines));
+
+        if (empty($stmt)) continue;
 
         // Only allow bookshop table operations for safety
         if (!preg_match('/bookshop/i', $stmt) &&
@@ -134,7 +143,6 @@ add_action('wp_ajax_bs_restore_backup', function() {
         }
 
         // Replace table prefix if different
-        $site_prefix = $wpdb->prefix;
         $stmt = preg_replace('/`[a-z0-9_]*(bookshop[a-z0-9_]*)`/i', "`{$site_prefix}$1`", $stmt);
 
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
