@@ -262,14 +262,127 @@ function bs_page_settings(){
         <?php endif; ?>
     </div>
 
+    <!-- SMTP / Email delivery -->
+    <?php if ( current_user_can('manage_options') ):
+        $smtp_err    = get_option('bookshop_last_smtp_error', '');
+        $smtp_err_at = get_option('bookshop_last_smtp_error_at', '');
+        $smtp_pwd    = get_option('bookshop_smtp_password', '');
+        $smtp_enc    = get_option('bookshop_smtp_encryption', 'tls');
+    ?>
+    <div class="bs-card" style="max-width:760px;margin-bottom:20px">
+        <h3 style="font-family:'Playfair Display',serif;margin-bottom:8px">📨 Email Delivery (SMTP)</h3>
+        <p style="font-size:.83rem;color:var(--muted);margin-bottom:14px">
+            Without SMTP, WordPress falls back to PHP's <code>mail()</code> which on most shared hosting
+            ends up in spam — or never leaves the outbox. Configure your host's outbound relay or a service
+            like SendGrid / Postmark / Amazon SES below.
+        </p>
+        <div class="bs-form-grid">
+            <div class="bs-form-group bs-span2">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="hidden" name="bookshop_smtp_enabled" value="0">
+                    <input type="checkbox" name="bookshop_smtp_enabled" class="bs-setting" value="1"
+                        <?=checked('1', get_option('bookshop_smtp_enabled'), false)?>>
+                    <span>Use SMTP for outbound email</span>
+                </label>
+            </div>
+            <div class="bs-form-group">
+                <label>SMTP Host</label>
+                <input type="text" name="bookshop_smtp_host" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_smtp_host',''))?>"
+                    placeholder="e.g. smtp.gmail.com">
+            </div>
+            <div class="bs-form-group">
+                <label>Port</label>
+                <input type="number" name="bookshop_smtp_port" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_smtp_port',587))?>">
+                <small style="color:var(--muted);font-size:.75rem">587 (TLS), 465 (SSL), or 25 (none)</small>
+            </div>
+            <div class="bs-form-group">
+                <label>Encryption</label>
+                <select name="bookshop_smtp_encryption" class="bs-input bs-setting">
+                    <option value="tls"  <?=$smtp_enc==='tls' ?'selected':''?>>TLS / STARTTLS</option>
+                    <option value="ssl"  <?=$smtp_enc==='ssl' ?'selected':''?>>SSL</option>
+                    <option value="none" <?=$smtp_enc==='none'?'selected':''?>>None</option>
+                </select>
+            </div>
+            <div class="bs-form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:24px">
+                    <input type="hidden" name="bookshop_smtp_auth" value="0">
+                    <input type="checkbox" name="bookshop_smtp_auth" class="bs-setting" value="1"
+                        <?=checked('1', get_option('bookshop_smtp_auth','1'), false)?>>
+                    <span>Server requires authentication</span>
+                </label>
+            </div>
+            <div class="bs-form-group">
+                <label>Username</label>
+                <input type="text" name="bookshop_smtp_username" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_smtp_username',''))?>"
+                    autocomplete="off">
+            </div>
+            <div class="bs-form-group">
+                <label>Password</label>
+                <input type="password" name="bookshop_smtp_password" class="bs-input bs-setting"
+                    value="<?=esc_attr($smtp_pwd)?>"
+                    autocomplete="new-password"
+                    placeholder="<?=$smtp_pwd?'(stored — leave to keep current)':'app password / SMTP password'?>">
+                <small style="color:var(--muted);font-size:.75rem">For Gmail use an App Password, not your account password.</small>
+            </div>
+            <div class="bs-form-group">
+                <label>From Email <small style="color:var(--muted);font-weight:normal">(optional override)</small></label>
+                <input type="email" name="bookshop_smtp_from_email" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_smtp_from_email',''))?>"
+                    placeholder="<?=esc_attr(get_option('admin_email'))?>">
+            </div>
+            <div class="bs-form-group">
+                <label>From Name <small style="color:var(--muted);font-weight:normal">(optional)</small></label>
+                <input type="text" name="bookshop_smtp_from_name" class="bs-input bs-setting"
+                    value="<?=esc_attr(get_option('bookshop_smtp_from_name',''))?>"
+                    placeholder="<?=esc_attr(get_option('bookshop_receipt_header',get_bloginfo('name')))?>">
+            </div>
+            <div class="bs-form-group bs-span2">
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                    <input type="email" id="bs-smtp-test-to" class="bs-input"
+                        value="<?=esc_attr(get_option('admin_email'))?>"
+                        style="flex:1;min-width:200px"
+                        placeholder="recipient for test email">
+                    <button class="bs-btn bs-btn-secondary" id="bs-smtp-test" type="button">📤 Send Test Email</button>
+                </div>
+                <small style="color:var(--muted);font-size:.75rem">
+                    Save the settings first, then send a test. Test emails record any SMTP error below
+                    so you can see what the server actually said.
+                </small>
+                <?php if($smtp_err): ?>
+                <div style="margin-top:8px;padding:8px 10px;background:#f8d7da;color:#721c24;border-radius:6px;font-size:.78rem">
+                    <strong>Last failure</strong> (<?=esc_html($smtp_err_at)?>): <?=esc_html($smtp_err)?>
+                </div>
+                <?php endif; ?>
+                <div id="bs-smtp-test-result" style="margin-top:8px;font-size:.83rem"></div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- Advanced Operations -->
     <div class="bs-card" style="max-width:760px;margin-bottom:20px">
         <h3 style="font-family:'Playfair Display',serif;margin-bottom:16px">🔧 Advanced Operations</h3>
         <div class="bs-form-grid">
             <div class="bs-form-group">
-                <label>End-of-Day Report Email</label>
+                <label>End-of-Day Report Email <small style="color:var(--muted);font-weight:normal">(leave blank to disable)</small></label>
                 <input type="email" name="bookshop_eod_email" class="bs-input bs-setting"
                     value="<?=esc_attr(get_option('bookshop_eod_email',get_option('admin_email')))?>">
+                <small style="color:var(--muted);font-size:.75rem">
+                    Report covers the previous trading day. Last sent:
+                    <strong><?=esc_html(get_option('bookshop_last_eod','Never'))?></strong>
+                    <?php $led = get_option('bookshop_last_eod_date',''); if($led) echo ' (for '.esc_html($led).')'; ?>
+                </small>
+            </div>
+            <div class="bs-form-group">
+                <label>Send time (hour, 0–23, site timezone)</label>
+                <input type="number" name="bookshop_eod_send_hour" class="bs-input bs-setting"
+                    min="0" max="23" value="<?=esc_attr(get_option('bookshop_eod_send_hour',7))?>">
+                <small style="color:var(--muted);font-size:.75rem">
+                    e.g. <code>7</code> = 7am, <code>22</code> = 10pm. Sends are checked hourly via WP-Cron.
+                </small>
             </div>
             <div class="bs-form-group" style="display:flex;flex-direction:column;justify-content:flex-end">
                 <button class="bs-btn bs-btn-secondary" id="bs-send-eod-now" type="button">📧 Send EOD Report Now</button>
