@@ -330,12 +330,17 @@ if(!is_user_logged_in()): ?>
             <button id="btn-clear-promo" style="display:none;color:var(--red)">✕</button>
         </div>
 
-        <!-- Discount + loyalty redeem -->
+        <!-- Discount + loyalty redeem + credit -->
         <div class="disc-row">
             <label><?=$cur?> Disc</label>
             <input type="number" id="manual-disc" min="0" step="0.01" value="0">
             <label>Redeem pts</label>
             <input type="number" id="loyalty-redeem" min="0" step="1" value="0">
+        </div>
+        <div class="disc-row" id="credit-use-row" style="display:none">
+            <label>💰 Use Credit <?=$cur?></label>
+            <input type="number" id="credit-use" min="0" step="0.01" value="0" style="flex:1" placeholder="0.00">
+            <span style="font-size:.72rem;color:var(--muted)" id="credit-avail-label"></span>
         </div>
 
         <!-- Payment method -->
@@ -918,7 +923,8 @@ function calcTotals(){
     const manDisc=parseFloat(document.getElementById('manual-disc').value)||0;
     const redeemPts=parseInt(document.getElementById('loyalty-redeem').value)||0;
     const redeemVal=redeemPts*LOY_VAL;
-    const afterDisc=Math.max(0,sub-manDisc-promoDisc-redeemVal);
+    const creditUsed=parseFloat(document.getElementById('credit-use').value)||0;
+    const afterDisc=Math.max(0,sub-manDisc-promoDisc-redeemVal-creditUsed);
 
     let tax=0, taxBase=0, subtotalDisplay=sub;
     if(TAX_MODE==='exclusive'&&TAX_RATE>0){
@@ -931,11 +937,11 @@ function calcTotals(){
         tax=Math.round((taxBase-(taxBase/(1+TAX_RATE)))*100)/100;
     }
     const total=Math.max(0,afterDisc+(TAX_MODE==='exclusive'?tax:0));
-    return{sub,manDisc,redeemVal,afterDisc,tax,total,subtotalDisplay};
+    return{sub,manDisc,redeemVal,creditUsed,afterDisc,tax,total,subtotalDisplay};
 }
 
 function updateTotals(){
-    const {sub,manDisc,redeemVal,tax,total}=calcTotals();
+    const {sub,manDisc,redeemVal,creditUsed,tax,total}=calcTotals();
     currentTotal=total;
     setText('t-subtotal',CUR+fmt(sub));
     setText('t-total',CUR+fmt(total));
@@ -945,6 +951,8 @@ function updateTotals(){
     if(manDisc>0) setText('t-disc','-'+CUR+fmt(manDisc));
     show('loyalty-row-display',redeemVal>0);
     if(redeemVal>0) setText('t-loyalty-val','-'+CUR+fmt(redeemVal));
+    show('credit-row-display',creditUsed>0);
+    if(creditUsed>0) setText('t-credit-val','-'+CUR+fmt(creditUsed));
     // Show VAT row on POS
     const taxRow=document.getElementById('tax-display-row');
     if(taxRow){
@@ -973,6 +981,7 @@ document.getElementById('tendered').addEventListener('input',updateChange);
 
 document.getElementById('manual-disc').addEventListener('input',updateTotals);
 document.getElementById('loyalty-redeem').addEventListener('input',updateTotals);
+document.getElementById('credit-use').addEventListener('input',updateTotals);
 
 // ── Payment method toggle ────────────────────────────────────────────
 document.querySelectorAll('.pay-btn').forEach(b=>{
@@ -1054,13 +1063,26 @@ window.selectCustomer=function(id,name,pts,credit){
     const lv=LOY_VAL;
     document.getElementById('cust-loyalty-info').style.display='block';
     document.getElementById('cust-loyalty-info').innerHTML=`⭐ <strong>${pts}</strong> pts (${CUR}${fmt(pts*lv)} value) &nbsp;|&nbsp; 💰 Credit: <strong>${CUR}${fmt(credit)}</strong>`;
+    // Show credit input if customer has credit balance
+    const creditRow=document.getElementById('credit-use-row');
+    if(credit>0){
+        creditRow.style.display='flex';
+        document.getElementById('credit-avail-label').textContent='(avail: '+CUR+fmt(credit)+')';
+        document.getElementById('credit-use').max=credit;
+    } else {
+        creditRow.style.display='none';
+    }
+    document.getElementById('credit-use').value=0;
     updateTotals();
 };
 document.getElementById('btn-clear-cust').addEventListener('click',()=>{
     customer=null;document.getElementById('cust-search').value='';
     document.getElementById('cust-loyalty-info').style.display='none';
     document.getElementById('btn-clear-cust').style.display='none';
-    document.getElementById('loyalty-redeem').value=0; updateTotals();
+    document.getElementById('loyalty-redeem').value=0;
+    document.getElementById('credit-use').value=0;
+    document.getElementById('credit-use-row').style.display='none';
+    updateTotals();
 });
 function closeAC(){document.getElementById('cust-ac').style.display='none';}
 document.addEventListener('click',e=>{if(!e.target.closest('#cust-search')&&!e.target.closest('#cust-ac'))closeAC();});
@@ -1158,6 +1180,7 @@ function submitSale(){
     btn.disabled=true;btn.textContent='Processing...';
     const manDisc=parseFloat(document.getElementById('manual-disc').value)||0;
     const redeemPts=parseInt(document.getElementById('loyalty-redeem').value)||0;
+    const creditUsed=parseFloat(document.getElementById('credit-use').value)||0;
     const note=document.getElementById('pos-note').value;
     let payDet={};
     if(payment==='split'){payDet={cash:parseFloat(document.getElementById('split-cash').value)||0,card:parseFloat(document.getElementById('split-card').value)||0};}
@@ -1171,7 +1194,7 @@ function submitSale(){
         cart:JSON.stringify(cart),payment,payment_details:JSON.stringify(payDet),
         discount:manDisc,promo_code:promoCode,
         customer_id:customer?.id||0,
-        credit_used:0,loyalty_redeem:redeemPts,note
+        credit_used:creditUsed,loyalty_redeem:redeemPts,note
     }).then(d=>{
         btn.disabled=false;btn.textContent='Complete Sale';
         if(d.success){
@@ -1497,6 +1520,8 @@ window.newSale=function(){
     document.getElementById('btn-clear-promo').style.display='none';
     document.getElementById('manual-disc').value=0;
     document.getElementById('loyalty-redeem').value=0;
+    document.getElementById('credit-use').value=0;
+    document.getElementById('credit-use-row').style.display='none';
     document.getElementById('tendered').value='';
     document.getElementById('change-row').style.display='none';
     document.getElementById('pos-note').value='';
