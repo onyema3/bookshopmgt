@@ -253,7 +253,7 @@ function bs_create_sale( $cart, $staff_id, $opts = [] ) {
 
     $wpdb->query('COMMIT');
 
-    $sale_result = ['sale_id'=>$sale_id,'ref'=>$ref,'total'=>$total,'tax'=>$tax,'loyalty_earned'=>$loyalty_earned];
+    $sale_result = ['sale_id'=>$sale_id,'ref'=>$ref,'total'=>$total,'tax'=>$tax,'loyalty_earned'=>$loyalty_earned,'credit_used'=>$credit_used,'loyalty_redeemed'=>$redeem_pts];
     return apply_filters('bs_after_sale_created', $sale_result);
 }
 
