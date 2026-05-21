@@ -393,6 +393,34 @@ function bs_2fa_intercept_login($user, $password){
     // Generate, hash, send. Failures bypass 2FA rather than lock out — same
     // reasoning as above: the goal is "make 2FA-enabled accounts safer when
     // possible," not "brick the login flow when SMTP is down."
+    //
+    // ── Reuse existing pending session if one exists ──────────────────────
+    // Without this, a user who clicks "Sign in again" (or whose browser
+    // resubmits the login form) gets a brand-new code every time — the old
+    // one becomes invalid and they see "different codes keep coming to email."
+    // We key by user_id so at most one pending challenge exists per user.
+    $existing_token = get_transient('bs_2fa_active_token_'.$user->ID);
+    if ($existing_token) {
+        $existing_sess = get_transient('bs_2fa_pending_'.$existing_token);
+        if (is_array($existing_sess) && time() < intval($existing_sess['expires_at'] ?? 0) && intval($existing_sess['attempts']) < 5) {
+            // Existing session still valid — redirect to it without sending a new code.
+            // Update redirect_to in case they came from a different URL this time.
+            $existing_sess['redirect_to'] = $_REQUEST['redirect_to'] ?? admin_url();
+            $existing_sess['remember']    = ! empty($_REQUEST['rememberme']);
+            set_transient('bs_2fa_pending_'.$existing_token, $existing_sess, 10 * MINUTE_IN_SECONDS);
+
+            $redirect = add_query_arg([
+                'action'        => 'bs_2fa',
+                'bs_2fa_token'  => $existing_token,
+            ], wp_login_url());
+            wp_safe_redirect($redirect);
+            exit;
+        }
+        // Expired or exhausted — clean up and fall through to generate a fresh one.
+        delete_transient('bs_2fa_pending_'.$existing_token);
+        delete_transient('bs_2fa_active_token_'.$user->ID);
+    }
+
     $code = bs_portal_otp_generate_code();
     $ok   = bs_2fa_send_code($user, $code, $pick);
     if ( ! $ok) {
@@ -415,6 +443,11 @@ function bs_2fa_intercept_login($user, $password){
         'redirect_to' => $_REQUEST['redirect_to'] ?? admin_url(),
         'remember'    => ! empty($_REQUEST['rememberme']),
     ], 10 * MINUTE_IN_SECONDS);
+
+    // Track the active token for this user so subsequent login attempts
+    // reuse it rather than generating a new code (the bug: "different codes
+    // keep coming to my email").
+    set_transient('bs_2fa_active_token_'.$user->ID, $token, 10 * MINUTE_IN_SECONDS);
 
     // Redirect to wp-login.php?action=bs_2fa&token=... — login_form_bs_2fa
     // (registered below) renders the challenge form there. This avoids the
@@ -458,11 +491,13 @@ function bs_2fa_verify_and_complete($token, $sess){
 
     if (time() > intval($sess['expires_at'] ?? 0)) {
         delete_transient($key);
+        delete_transient('bs_2fa_active_token_'.intval($sess['user_id']));
         bs_2fa_render_challenge_page($token, null, 'Your code expired. Please log in again.');
         return;
     }
     if (intval($sess['attempts']) >= 5) {
         delete_transient($key);
+        delete_transient('bs_2fa_active_token_'.intval($sess['user_id']));
         bs_2fa_render_challenge_page($token, null, 'Too many incorrect attempts. Please log in again.');
         return;
     }
@@ -484,6 +519,7 @@ function bs_2fa_verify_and_complete($token, $sess){
 
     // Success. Burn the OTP, set the trust cookie if asked, complete login.
     delete_transient($key);
+    delete_transient('bs_2fa_active_token_'.intval($sess['user_id']));
 
     if ( ! empty($_POST['bs_2fa_trust'])) {
         bs_2fa_set_trust_cookie(intval($sess['user_id']));
