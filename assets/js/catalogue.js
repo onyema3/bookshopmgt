@@ -135,6 +135,39 @@ function collectCheckoutData(){
     return{name:name,email:email,phone:phone,address:$('#bs-ord-address').val(),notes:$('#bs-ord-notes').val(),type:orderType};
 }
 
+window.bsPayWithGiftCard=function(){
+    $('#bs-gc-pay-row').toggle();
+    $('#bs-gc-order-msg').hide();
+    $('#bs-gc-order-code').val('').focus();
+};
+
+window.bsRedeemGiftCardForOrder=function(){
+    var data=collectCheckoutData();
+    if(!data) return;
+    var gcCode=$('#bs-gc-order-code').val().trim().toUpperCase();
+    if(!gcCode){$('#bs-gc-order-msg').text('Enter a gift card code').css({display:'block',background:'#fde8e8',color:'#c0392b'});return;}
+    var total=cart.reduce(function(s,c){return s+c.price*c.qty;},0);
+    var items=JSON.stringify(cart);
+    var $msg=$('#bs-gc-order-msg');
+    $msg.text('Processing...').css({display:'block',background:'#fffbf0',color:'#8a7a65'});
+
+    // Step 1: Create the order
+    $.post(BSCatalogue.ajax_url,{action:'bs_submit_online_order',items:items,name:data.name,email:data.email,phone:data.phone,address:data.address,notes:data.notes,type:data.type},function(res){
+        if(!res.success){$msg.text(res.data||'Error creating order').css({background:'#fde8e8',color:'#c0392b'});return;}
+        var orderId=res.data.id;
+        var orderRef=res.data.ref;
+        // Step 2: Redeem gift card for the order
+        $.post(BSCatalogue.ajax_url,{action:'bs_redeem_gc_for_online_order',gc_code:gcCode,amount:total,order_id:orderId},function(r){
+            if(r.success){
+                $msg.text('✓ Gift card applied! Remaining balance: '+r.data.new_balance_formatted).css({background:'#e8f8e8',color:'#27ae60'});
+                setTimeout(function(){ showOrderSuccess(orderRef); },1500);
+            } else {
+                $msg.text(r.data||'Gift card redemption failed').css({background:'#fde8e8',color:'#c0392b'});
+            }
+        });
+    });
+};
+
 function showOrderSuccess(ref){
     $('#bs-checkout-modal').hide();
     cart=[];renderCart();
