@@ -353,3 +353,61 @@ function bs_ajax_purchase_gc_online(){
         'value' => $value,
     ]);
 }
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ONLINE ORDER GIFT CARD REDEMPTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Redeem gift card for an online order ──────────────────────────────────────
+add_action('wp_ajax_bs_redeem_gc_for_online_order', 'bs_ajax_redeem_gc_online_order');
+add_action('wp_ajax_nopriv_bs_redeem_gc_for_online_order', 'bs_ajax_redeem_gc_online_order');
+function bs_ajax_redeem_gc_online_order(){
+    $gc_code  = strtoupper(trim(sanitize_text_field($_POST['gc_code'] ?? '')));
+    $amount   = floatval($_POST['amount'] ?? 0);
+    $order_id = intval($_POST['order_id'] ?? 0);
+
+    if(!$gc_code) wp_send_json_error('Enter a gift card code');
+    if($amount <= 0) wp_send_json_error('Invalid order amount');
+    if(!$order_id) wp_send_json_error('Missing order');
+
+    // Validate the gift card
+    $card = bs_get_gift_card($gc_code);
+    if(!$card) wp_send_json_error('Gift card not found');
+    if($card->status !== 'active') wp_send_json_error('Gift card is '.$card->status);
+    if($card->expires_at && $card->expires_at < date('Y-m-d')) wp_send_json_error('Gift card has expired');
+
+    $balance = floatval($card->balance);
+    if($balance < $amount){
+        wp_send_json_error('Insufficient gift card balance ('.bs_fmt($balance).'). Order total is '.bs_fmt($amount));
+    }
+
+    // Redeem
+    $result = bs_redeem_gift_card($gc_code, $amount, [
+        'sale_id'  => 0,
+        'staff_id' => get_current_user_id() ?: 0,
+        'note'     => "Online order #$order_id",
+    ]);
+
+    if(!empty($result['error'])) wp_send_json_error($result['error']);
+
+    // Mark the online order as paid via gift card
+    global $wpdb;
+    $wpdb->update("{$wpdb->prefix}bookshop_online_orders", [
+        'status'          => 'paid',
+        'payment_ref'     => $gc_code,
+        'payment_amount'  => $amount,
+        'payment_gateway' => 'gift_card',
+    ], ['id' => $order_id]);
+
+    bs_audit('online_order_gc_payment', 'online_order', $order_id,
+        "Paid with gift card $gc_code — ".bs_fmt($amount));
+
+    wp_send_json_success([
+        'code'                 => $result['code'],
+        'amount_used'          => $result['amount_used'],
+        'new_balance'          => $result['new_balance'],
+        'new_balance_formatted'=> bs_fmt($result['new_balance']),
+    ]);
+}
