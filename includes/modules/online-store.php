@@ -379,7 +379,18 @@ function bs_catalogue_shortcode($atts){
                 <?php if(get_option('bookshop_flutterwave_public_key')): ?>
                 <button class="bs-cat-btn" style="flex:1;background:#f5a623" onclick="bsPayWithFlutterwave()">Pay with Flutterwave</button>
                 <?php endif; ?>
+                <?php if(function_exists('bs_get_gift_card')): ?>
+                <button class="bs-cat-btn" style="flex:1;background:#8a5c00;color:#fff" onclick="bsPayWithGiftCard()">🎁 Gift Card</button>
+                <?php endif; ?>
                 <button class="bs-cat-btn" style="flex:1;background:#2a7a3b" onclick="bsPayOnPickup()">Pay on Pickup/Delivery</button>
+            </div>
+            <!-- Gift card payment form (hidden until clicked) -->
+            <div id="bs-gc-pay-row" style="display:none;margin-top:10px">
+                <div style="display:flex;gap:6px;align-items:center">
+                    <input type="text" id="bs-gc-order-code" placeholder="Enter gift card code..." style="flex:1;padding:9px 12px;border:1.5px solid #e0d4c0;border-radius:8px;font-size:.9rem;text-transform:uppercase">
+                    <button class="bs-cat-btn" style="padding:9px 14px" onclick="bsRedeemGiftCardForOrder()">Redeem</button>
+                </div>
+                <div id="bs-gc-order-msg" style="display:none;margin-top:6px;font-size:.82rem;padding:6px 10px;border-radius:6px"></div>
             </div>
             <div id="bs-checkout-msg" style="margin-top:10px;font-size:.85rem;color:#c0392b"></div>
             <button onclick="document.getElementById('bs-checkout-modal').style.display='none'" style="margin-top:12px;background:none;border:none;cursor:pointer;color:#999;font-size:.82rem">✕ Cancel</button>
