@@ -557,6 +557,18 @@ if(!is_user_logged_in()): ?>
                     <div style="display:flex;justify-content:space-between;font-size:1.1rem;font-weight:700;margin-top:6px;padding-top:6px;border-top:1.5px solid #333">
                         <span>TOTAL</span><span id="r-total">—</span>
                     </div>
+                    <div style="display:flex;justify-content:space-between;color:var(--muted)" id="r-credit-row">
+                        <span>Store Credit</span><span id="r-credit">—</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;color:var(--muted)" id="r-loyalty-redeem-row">
+                        <span>Points Redeemed</span><span id="r-loyalty-redeem">—</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;color:var(--muted)" id="r-gc-row">
+                        <span>Gift Card</span><span id="r-gc">—</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;color:var(--muted)" id="r-split-row">
+                        <span>Split</span><span id="r-split">—</span>
+                    </div>
                     <div style="display:flex;justify-content:space-between;color:var(--muted)" id="r-tendered-row">
                         <span>Tendered</span><span id="r-tendered">—</span>
                     </div>
@@ -1258,6 +1270,32 @@ function showReceipt(data){
     show('r-change-row',   payment==='cash' && tendered>0);
     if(tendered>0){ setText('r-tendered', CUR+fmt(tendered)); setText('r-change', CUR+fmt(Math.abs(change))); }
 
+    // Store credit used
+    const creditUsed=parseFloat(data.credit_used)||0;
+    show('r-credit-row', creditUsed>0);
+    if(creditUsed>0) setText('r-credit', '-'+CUR+fmt(creditUsed));
+
+    // Loyalty points redeemed
+    const loyRedeemed=parseInt(data.loyalty_redeemed)||0;
+    const loyRedVal=loyRedeemed*LOY_VAL;
+    show('r-loyalty-redeem-row', loyRedeemed>0);
+    if(loyRedeemed>0) setText('r-loyalty-redeem', '-'+CUR+fmt(loyRedVal)+' ('+loyRedeemed+' pts)');
+
+    // Gift card
+    const gcRedeemed=parseFloat(data.gc_redeemed)||0;
+    const gcCode=data.gc_code||'';
+    show('r-gc-row', gcRedeemed>0);
+    if(gcRedeemed>0) setText('r-gc', '-'+CUR+fmt(gcRedeemed)+(gcCode?' ('+gcCode.slice(-4)+')':''));
+
+    // Split payment breakdown
+    const isSplit=payment==='split';
+    show('r-split-row', isSplit);
+    if(isSplit){
+        const splitCash=parseFloat(document.getElementById('split-cash').value)||0;
+        const splitCard=parseFloat(document.getElementById('split-card').value)||0;
+        setText('r-split', 'Cash: '+CUR+fmt(splitCash)+' | Card: '+CUR+fmt(splitCard));
+    }
+
     // Items table
     document.getElementById('r-items').innerHTML = currentSaleCart.map(c=>`
         <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dotted #eee;font-size:.8rem">
@@ -1800,6 +1838,39 @@ function bs_render_printable_receipt($sale_id){
             <?php endif; ?>
             <div class="bsr-meta-row bsr-grand"><span>TOTAL</span><span><?=bs_fmt($sale->total)?></span></div>
         </div>
+
+        <?php
+        // Payment breakdown — credit, loyalty redeemed, gift card, split
+        $has_breakdown = ($sale->credit_used > 0) || ($sale->loyalty_redeemed > 0)
+            || ($sale->payment_method === 'gift_card') || ($sale->payment_method === 'split');
+        if ($has_breakdown): ?>
+        <hr class="bsr-divider">
+        <div class="bsr-totals" style="font-size:9pt">
+            <?php if ($sale->credit_used > 0): ?>
+            <div class="bsr-meta-row"><span>Store Credit</span><span>-<?=bs_fmt($sale->credit_used)?></span></div>
+            <?php endif; ?>
+            <?php if ($sale->loyalty_redeemed > 0):
+                $loy_val = floatval(get_option('bookshop_loyalty_value', 10));
+                $loy_redeem_val = $sale->loyalty_redeemed * $loy_val;
+            ?>
+            <div class="bsr-meta-row"><span>Points Redeemed</span><span>-<?=bs_fmt($loy_redeem_val)?> (<?=intval($sale->loyalty_redeemed)?> pts)</span></div>
+            <?php endif; ?>
+            <?php if ($sale->payment_method === 'gift_card'):
+                $pay_det = json_decode($sale->payment_details, true);
+                $gc_code = $pay_det['gc_code'] ?? '';
+            ?>
+            <div class="bsr-meta-row"><span>Gift Card</span><span><?=esc_html($gc_code ? '••••'.substr($gc_code, -4) : 'Gift Card')?></span></div>
+            <?php endif; ?>
+            <?php if ($sale->payment_method === 'split'):
+                $pay_det = json_decode($sale->payment_details, true);
+                $split_cash = floatval($pay_det['cash'] ?? 0);
+                $split_card = floatval($pay_det['card'] ?? 0);
+            ?>
+            <div class="bsr-meta-row"><span>Cash</span><span><?=bs_fmt($split_cash)?></span></div>
+            <div class="bsr-meta-row"><span>Card</span><span><?=bs_fmt($split_card)?></span></div>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
         <?php if ($sale->loyalty_earned > 0): ?>
         <hr class="bsr-divider">
